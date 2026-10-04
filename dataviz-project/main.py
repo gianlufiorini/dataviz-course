@@ -527,6 +527,7 @@ class InteractivePresentation:
             match_aspect=True,
             aspect_ratio=map_aspect,
         )
+        
         p_price.background_fill_color = "#FAFAFA"
         p_price.border_fill_color = "#FFFFFF"
         p_price.grid.grid_line_color = None
