@@ -22,25 +22,24 @@ from bokeh.models import (
     PrintfTickFormatter,
     CustomJS,
     GeoJSONDataSource,
-    TapTool,
 )
 from bokeh.layouts import column, row, layout
 from bokeh.palettes import RdYlBu11, YlOrRd9
 from bokeh.transform import factor_cmap
 
 # ==============================================================================
-# CARICAMENTO E PROIEZIONE MAPPA (Robinson nativo tramite +proj=robin)
+# MAP LOADING AND PROJECTION (Native Robinson via +proj=robin)
 # ==============================================================================
 base_dir = os.path.dirname(__file__)
 WORLD_PATH = os.path.join(base_dir, "data", "world-countries.json")
 
 try:
-    print(f"Tentativo di caricamento mappa da: {WORLD_PATH}")
+    print(f"Attempting to load map from: {WORLD_PATH}")
     _world_raw = gpd.read_file(WORLD_PATH)
     WORLD_GEO = _world_raw.to_crs("+proj=robin")
-    print("Mappa caricata e proiettata con successo!")
+    print("Map successfully loaded and projected!")
 except Exception as e:
-    print(f"ERRORE nel caricamento della mappa: {e}")
+    print(f"ERROR loading map: {e}")
     try:
         WORLD_GEO = _world_raw.to_crs("EPSG:4326")
     except Exception:
@@ -280,7 +279,7 @@ class InteractivePresentation:
             </p>
         </div>
         """,
-            width=1000,
+            width=1200,
             height=320,
         )
 
@@ -297,7 +296,7 @@ class InteractivePresentation:
                     Select a wine category below to inspect rating and price distribution alongside a Cubic Gamma Regression fit (Log Link).
             </p>
             """,
-            width=1000,
+            width=1200,
         )
 
         rng = np.random.default_rng(123)
@@ -348,8 +347,8 @@ class InteractivePresentation:
         fit_source = ColumnDataSource(data=compute_gamma_fit(initial_df))
 
         p = figure(
-            width=900,
-            height=500,
+            width=1000,
+            height=520,
             title=f"{initial_kind} Wine",
             y_axis_type="log",
             x_axis_label="Average Rating",
@@ -431,26 +430,26 @@ class InteractivePresentation:
         return layout([[title], [toggle_container], [p]])
 
     def create_slide_2_visual_vocabulary(self):
-        """Slide: Geographic Wine Analysis (Price: Yellow-Red, Rating: Blue-Yellow-Red Divergent)"""
+        """Slide: Geographic Wine Analysis (Price & Rating World Maps - Vertically Stacked)"""
         title = Div(
             text="""
         <div style="text-align: center; font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; margin-bottom: 10px;">
-            <h2 style="color: #4A0E17; font-size: 24px; margin-bottom: 4px; font-weight: 700;">
+            <h2 style="color: #4A0E17; font-size: 26px; margin-bottom: 4px; font-weight: 700;">
                 🌍 Geographic Wine Analysis: Price & Rating by Country
             </h2>
-            <p style="color: #6E5B55; font-size: 13px; margin: 0;">
-                Seleziona la categoria di vino per aggiornare le mappe. 
-                <b>Passa il mouse</b> per l'anteprima rapida o <b>clicca uno stato</b> per visualizzare le statistiche dettagliate nello specifico pannello sottostante.
+            <p style="color: #6E5B55; font-size: 15px; margin: 0;">
+                Select a wine category below to update the maps. 
+                Hover over any country to inspect detailed price and rating statistics.
             </p>
         </div>
         """,
-            width=1150,
+            width=1200,
         )
 
         if WORLD_GEO is None or WORLD_GEO.empty:
             error_div = Div(
-                text="<p style='color: #4A0E17; text-align: center;'>Impossibile caricare le geometrie dei paesi del mondo.</p>",
-                width=1150
+                text="<p style='color: #4A0E17; text-align: center;'>Unable to load world country geometries.</p>",
+                width=1200
             )
             return layout([[title], [error_div]])
 
@@ -516,36 +515,11 @@ class InteractivePresentation:
             nan_color="#EBEBEB"
         )
 
-        default_panel_style = (
-            "padding: 12px 16px; border-radius: 8px; background-color: #F9F9FB; "
-            "border: 1px solid #E2E8F0; font-family: sans-serif; min-height: 75px;"
-        )
-
-        price_info_div = Div(
-            text=f"""
-            <div style="{default_panel_style}">
-                <h4 style="margin: 0 0 4px 0; color: #4A0E17; font-size: 14px;">🍷 Statistiche Prezzo</h4>
-                <p style="margin: 0; color: #64748B; font-size: 12px;">Clicca su uno stato nella mappa del <b>Prezzo</b> per vederne i dettagli analitici.</p>
-            </div>
-            """,
-            width=560,
-        )
-
-        rating_info_div = Div(
-            text=f"""
-            <div style="{default_panel_style}">
-                <h4 style="margin: 0 0 4px 0; color: #1E3A8A; font-size: 14px;">⭐ Statistiche Rating</h4>
-                <p style="margin: 0; color: #64748B; font-size: 12px;">Clicca su uno stato nella mappa del <b>Rating</b> per vederne i dettagli analitici.</p>
-            </div>
-            """,
-            width=560,
-        )
-
         p_price = figure(
-            width=560,
-            height=360,
-            title="Prezzo Medio del Vino per Paese (€)",
-            tools="pan,wheel_zoom,reset,tap,save",
+            width=1160,
+            height=500,
+            title="Average Wine Price by Country ($)",
+            tools="pan,wheel_zoom,reset,save",
             x_axis_location=None,
             y_axis_location=None,
             x_range=x_bounds,
@@ -564,34 +538,43 @@ class InteractivePresentation:
             fill_alpha=0.9,
             line_color="#FFFFFF",
             line_width=0.6,
-            nonselection_fill_alpha=0.7,
+            nonselection_fill_alpha=0.9,
             nonselection_fill_color={"field": "Price_Mean", "transform": price_mapper},
         )
 
-        p_price.add_tools(HoverTool(
-            renderers=[price_patches],
-            tooltips=[
-                ("Paese", "@name"),
-                ("Prezzo Medio", "€@Price_Mean"),
-                ("Vini Registrati", "@Count"),
-            ]
-        ))
-
         cb_price = ColorBar(
             color_mapper=price_mapper,
-            width=10,
+            width=14,
             location=(0, 0),
-            title="€",
-            title_text_font_size="9pt",
+            title="$",
+            title_text_font_size="10pt",
             label_standoff=4,
         )
         p_price.add_layout(cb_price, "right")
 
+        price_hover = HoverTool(
+            tooltips="""
+            <div style="font-family: sans-serif; padding: 6px 10px; font-size: 12px; background: #FFFFFF; border: 1px solid #CBD5E1; border-radius: 6px; box-shadow: 0 2px 6px rgba(0,0,0,0.1);">
+                <strong style="color: #78350F; font-size: 13px;">📍 @name</strong><br/>
+                <div style="margin-top: 4px; line-height: 1.4;">
+                    <b>Mean Price:</b> $@Price_Mean<br/>
+                    <b>Median Price:</b> $@Price_Median<br/>
+                    <b>Min:</b> $@Price_Min | <b>Max:</b> $@Price_Max<br/>
+                    <b>Wines Count:</b> @Count
+                </div>
+            </div>
+            """,
+            renderers=[price_patches],
+            attachment="above",
+            mode="mouse"
+        )
+        p_price.add_tools(price_hover)
+
         p_rating = figure(
-            width=560,
-            height=360,
-            title="Rating Medio del Vino per Paese (Divergente: Blu-Rosso)",
-            tools="pan,wheel_zoom,reset,tap,save",
+            width=1160,
+            height=500,
+            title="Average Wine Rating by Country",
+            tools="pan,wheel_zoom,reset,save",
             x_axis_location=None,
             y_axis_location=None,
             x_range=p_price.x_range,
@@ -610,120 +593,62 @@ class InteractivePresentation:
             fill_alpha=0.9,
             line_color="#FFFFFF",
             line_width=0.6,
-            nonselection_fill_alpha=0.7,
+            nonselection_fill_alpha=0.9,
             nonselection_fill_color={"field": "Rating_Mean", "transform": rating_mapper},
         )
 
-        p_rating.add_tools(HoverTool(
-            renderers=[rating_patches],
-            tooltips=[
-                ("Paese", "@name"),
-                ("Rating Medio", "@Rating_Mean ⭐"),
-                ("Vini Registrati", "@Count"),
-            ]
-        ))
-
         cb_rating = ColorBar(
             color_mapper=rating_mapper,
-            width=10,
+            width=14,
             location=(0, 0),
             title="⭐",
-            title_text_font_size="9pt",
+            title_text_font_size="10pt",
             label_standoff=4,
         )
         p_rating.add_layout(cb_rating, "right")
 
-        price_tap_js = CustomJS(args={'src': price_source, 'div': price_info_div}, code="""
-            const indices = src.selected.indices;
-            if (indices.length === 0) return;
-            
-            const idx = indices[0];
-            const data = JSON.parse(src.geojson).features[idx].properties;
-            
-            if (data.Price_Mean === "N/A" || data.Price_Mean === null) {
-                div.text = `
-                <div style="padding: 12px 16px; border-radius: 8px; background-color: #FEF2F2; border: 1px solid #FCA5A5; font-family: sans-serif;">
-                    <h4 style="margin:0 0 2px 0; color: #991B1B;">📍 ${data.name}</h4>
-                    <p style="margin:0; color: #7F1D1D; font-size: 12px;">Nessun dato sul prezzo disponibile per questo paese.</p>
-                </div>`;
-                return;
-            }
-
-            div.text = `
-            <div style="padding: 12px 16px; border-radius: 8px; background-color: #FFFBEB; border: 1px solid #FCD34D; font-family: sans-serif;">
-                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 6px;">
-                    <h3 style="margin:0; color: #78350F; font-size: 15px;">🍷 <b>${data.name}</b> — Analisi Prezzi</h3>
-                    <span style="font-size:11px; background:#FEF3C7; padding: 2px 8px; border-radius:12px; color:#92400E; font-weight:bold;">Trovati: ${data.Count} vini</span>
+        rating_hover = HoverTool(
+            tooltips="""
+            <div style="font-family: sans-serif; padding: 6px 10px; font-size: 12px; background: #FFFFFF; border: 1px solid #CBD5E1; border-radius: 6px; box-shadow: 0 2px 6px rgba(0,0,0,0.1);">
+                <strong style="color: #1E3A8A; font-size: 13px;">📍 @name</strong><br/>
+                <div style="margin-top: 4px; line-height: 1.4;">
+                    <b>Mean Rating:</b> @Rating_Mean ⭐<br/>
+                    <b>Median Rating:</b> @Rating_Median ⭐<br/>
+                    <b>Min:</b> @Rating_Min ⭐ | <b>Max:</b> @Rating_Max ⭐<br/>
+                    <b>Wines Count:</b> @Count
                 </div>
-                <div style="display: flex; gap: 18px; font-size: 13px; color: #451A03;">
-                    <div><b>Medio:</b> €${data.Price_Mean}</div>
-                    <div><b>Mediano:</b> €${data.Price_Median}</div>
-                    <div><b>Min:</b> €${data.Price_Min}</div>
-                    <div><b>Max:</b> €${data.Price_Max}</div>
-                </div>
-            </div>`;
-        """)
-
-        rating_tap_js = CustomJS(args={'src': rating_source, 'div': rating_info_div}, code="""
-            const indices = src.selected.indices;
-            if (indices.length === 0) return;
-            
-            const idx = indices[0];
-            const data = JSON.parse(src.geojson).features[idx].properties;
-            
-            if (data.Rating_Mean === "N/A" || data.Rating_Mean === null) {
-                div.text = `
-                <div style="padding: 12px 16px; border-radius: 8px; background-color: #FEF2F2; border: 1px solid #FCA5A5; font-family: sans-serif;">
-                    <h4 style="margin:0 0 2px 0; color: #991B1B;">📍 ${data.name}</h4>
-                    <p style="margin:0; color: #7F1D1D; font-size: 12px;">Nessun dato sul rating disponibile per questo paese.</p>
-                </div>`;
-                return;
-            }
-
-            div.text = `
-            <div style="padding: 12px 16px; border-radius: 8px; background-color: #EFF6FF; border: 1px solid #93C5FD; font-family: sans-serif;">
-                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 6px;">
-                    <h3 style="margin:0; color: #1E3A8A; font-size: 15px;">⭐ <b>${data.name}</b> — Analisi Ratings</h3>
-                    <span style="font-size:11px; background:#DBEAFE; padding: 2px 8px; border-radius:12px; color:#1E40AF; font-weight:bold;">Trovati: ${data.Count} vini</span>
-                </div>
-                <div style="display: flex; gap: 18px; font-size: 13px; color: #1E3A8A;">
-                    <div><b>Medio:</b> ${data.Rating_Mean} ⭐</div>
-                    <div><b>Mediano:</b> ${data.Rating_Median} ⭐</div>
-                    <div><b>Min:</b> ${data.Rating_Min} ⭐</div>
-                    <div><b>Max:</b> ${data.Rating_Max} ⭐</div>
-                </div>
-            </div>`;
-        """)
-
-        price_source.selected.js_on_change('indices', price_tap_js)
-        rating_source.selected.js_on_change('indices', rating_tap_js)
+            </div>
+            """,
+            renderers=[rating_patches],
+            attachment="above",
+            mode="mouse"
+        )
+        p_rating.add_tools(rating_hover)
 
         select_wine = Select(
-            title="Filtra Categoria Vino:",
+            title="Filter Wine Category:",
             value="Global",
             options=options,
-            width=240,
+            width=260,
         )
 
         def update_maps(attr, old, new):
             price_source.geojson = get_price_geojson(new)
             rating_source.geojson = get_rating_geojson(new)
 
-            title_suffix = f"({new})" if new != "Global" else "(Tutti i Vini)"
-            p_price.title.text = f"Prezzo Medio del Vino per Paese {title_suffix}"
-            p_rating.title.text = f"Rating Medio del Vino per Paese {title_suffix}"
+            title_suffix = f"({new})" if new != "Global" else "(All Wines)"
+            p_price.title.text = f"Average Wine Price by Country {title_suffix}"
+            p_rating.title.text = f"Average Wine Rating by Country {title_suffix}"
 
         select_wine.on_change("value", update_maps)
 
         controls_row = row(select_wine, align="center", margin=(0, 0, 15, 0))
-        maps_row = row(p_price, p_rating)
-        info_row = row(price_info_div, rating_info_div)
 
         return layout([
             [title],
             [controls_row],
-            [maps_row],
-            [info_row]
+            [p_price],
+            [p_rating]
         ])
 
     def create_slide_3_overview(self):
@@ -733,7 +658,7 @@ class InteractivePresentation:
         <h2 style="text-align: center; color: #AF1B3F; font-family: 'Lusitania', serif;">📈 Data Overview Dashboard</h2>
         <p style="text-align: center; color: #5C4A42;">Multiple synchronized visualizations showing different aspects of the dataset</p>
         """,
-            width=1000,
+            width=1200,
         )
 
         categories = ["Product A", "Product B", "Product C", "Product D", "Product E"]
@@ -752,8 +677,8 @@ class InteractivePresentation:
 
         p1 = figure(
             x_range=categories,
-            width=480,
-            height=280,
+            width=580,
+            height=300,
             title="Sales by Product",
             toolbar_location="above",
         )
@@ -770,7 +695,7 @@ class InteractivePresentation:
         )
         p1.y_range.start = 0
 
-        p2 = figure(width=480, height=280, title="Trend Analysis")
+        p2 = figure(width=580, height=300, title="Trend Analysis")
         p2.line("x", "y", source=line_source, line_width=2, color="#AF1B3F")
         p2.scatter("x", "y", source=line_source, size=5, color="#AF1B3F", alpha=0.6)
 
@@ -792,8 +717,8 @@ class InteractivePresentation:
         p3 = figure(
             x_range=months,
             y_range=days,
-            width=480,
-            height=280,
+            width=580,
+            height=300,
             title="Activity Heatmap",
             toolbar_location="above",
         )
@@ -813,7 +738,7 @@ class InteractivePresentation:
 
         stats = Div(
             text=f"""
-        <div style="background-color: #FFFFFF; border: 1px solid #E2D7C3; padding: 20px; border-radius: 8px; color: #211B18; height: 235px; box-sizing: border-box;">
+        <div style="background-color: #FFFFFF; border: 1px solid #E2D7C3; padding: 20px; border-radius: 8px; color: #211B18; height: 255px; box-sizing: border-box;">
             <h3 style="color: #AF1B3F; margin-top: 0;">📊 Key Metrics:</h3>
             <table style="width: 100%; font-size: 14px; border-collapse: collapse;">
                 <tr style="border-bottom: 1px solid #E2D7C3;"><td style="padding: 8px 0;"><b>Total Products:</b></td><td>{len(categories)}</td></tr>
@@ -822,8 +747,8 @@ class InteractivePresentation:
             </table>
         </div>
         """,
-            width=480,
-            height=280,
+            width=580,
+            height=300,
         )
 
         return layout([[title], [p1, p2], [p3, stats]])
@@ -835,12 +760,12 @@ class InteractivePresentation:
         <h2 style="text-align: center; color: #AF1B3F; font-family: 'Lusitania', serif;">🎮 Interactive Data Explorer</h2>
         <p style="text-align: center; color: #5C4A42;">Adjust parameters to explore different data visualizations</p>
         """,
-            width=1000,
+            width=1200,
         )
 
         self.slide4_source = ColumnDataSource(data=dict(x=[], y=[]))
 
-        p = figure(width=620, height=400, title="Interactive Function Plotter")
+        p = figure(width=800, height=450, title="Interactive Function Plotter")
         self.slide4_line = p.line(
             "x", "y", source=self.slide4_source, line_width=2, color="#AF1B3F"
         )
@@ -850,16 +775,16 @@ class InteractivePresentation:
             value="sin",
             options=["sin", "cos", "exp", "log", "polynomial"],
             css_classes=["theme-select"],
-            width=320,
+            width=360,
         )
         self.param_slider = Slider(
-            start=0.1, end=5, value=1, step=0.1, title="Parameter", width=320
+            start=0.1, end=5, value=1, step=0.1, title="Parameter", width=360
         )
         self.points_slider = Slider(
-            start=50, end=500, value=100, step=50, title="Number of Points", width=320
+            start=50, end=500, value=100, step=50, title="Number of Points", width=360
         )
         self.noise_slider = Slider(
-            start=0, end=1, value=0, step=0.05, title="Noise Level", width=320
+            start=0, end=1, value=0, step=0.05, title="Noise Level", width=360
         )
 
         def update_slide4():
@@ -904,7 +829,7 @@ class InteractivePresentation:
             </ul>
         </div>
         """,
-            width=320,
+            width=360,
             height=150,
         )
 
@@ -925,7 +850,7 @@ class InteractivePresentation:
         <h2 style="text-align: center; color: #AF1B3F; font-family: 'Lusitania', serif;">📅 Time Series Analysis</h2>
         <p style="text-align: center; color: #5C4A42;">Exploring temporal patterns and trends</p>
         """,
-            width=1000,
+            width=1200,
         )
 
         dates = pd.date_range("2023-01-01", periods=365, freq="D")
@@ -942,8 +867,8 @@ class InteractivePresentation:
         )
 
         p = figure(
-            width=960,
-            height=380,
+            width=1160,
+            height=420,
             x_axis_type="datetime",
             title="Time Series with Moving Averages",
         )
@@ -978,7 +903,7 @@ class InteractivePresentation:
             </table>
         </div>
         """,
-            width=960,
+            width=1160,
             height=100,
         )
 
@@ -991,7 +916,7 @@ class InteractivePresentation:
         <h2 style="text-align: center; color: #AF1B3F; font-family: 'Lusitania', serif;">🔗 Correlation Analysis</h2>
         <p style="text-align: center; color: #5C4A42;">Exploring relationships between variables</p>
         """,
-            width=1000,
+            width=1200,
         )
 
         n_vars = 8
@@ -1021,8 +946,8 @@ class InteractivePresentation:
         p = figure(
             x_range=var_names,
             y_range=list(reversed(var_names)),
-            width=540,
-            height=460,
+            width=680,
+            height=500,
             title="Correlation Matrix",
             toolbar_location="above",
             tools="hover,save",
@@ -1047,7 +972,7 @@ class InteractivePresentation:
 
         color_bar = ColorBar(
             color_mapper=mapper,
-            width=8,
+            width=10,
             location=(0, 0),
             ticker=BasicTicker(desired_num_ticks=10),
             formatter=PrintfTickFormatter(format="%.1f"),
@@ -1056,13 +981,13 @@ class InteractivePresentation:
 
         guide = Div(
             text="""
-        <div style="background-color: #FFFFFF; border: 1px solid #E2D7C3; padding: 20px; border-radius: 8px; color: #211B18; height: 200px;">
+        <div style="background-color: #FFFFFF; border: 1px solid #E2D7C3; padding: 20px; border-radius: 8px; color: #211B18; height: 220px;">
             <h3 style="color: #AF1B3F; margin-top: 0;">📊 Interpretation Guide:</h3>
-            <p style="font-size: 13px; line-height: 1.5;">Hover over individual cells to inspect precise correlation coefficients between dataset variables.</p>
+            <p style="font-size: 14px; line-height: 1.5;">Hover over individual cells to inspect precise correlation coefficients between dataset variables.</p>
         </div>
         """,
-            width=360,
-            height=240,
+            width=440,
+            height=260,
         )
 
         return layout([[title], [p, guide]])
@@ -1075,7 +1000,7 @@ class InteractivePresentation:
             🎯 Conclusions & Key Takeaways
         </h1>
         """,
-            width=1000,
+            width=1200,
             height=80,
         )
 
@@ -1090,7 +1015,7 @@ class InteractivePresentation:
             </ul>
         </div>
         """,
-            width=460,
+            width=560,
             height=220,
         )
 
@@ -1105,7 +1030,7 @@ class InteractivePresentation:
             </ul>
         </div>
         """,
-            width=460,
+            width=560,
             height=220,
         )
 
@@ -1119,7 +1044,7 @@ class InteractivePresentation:
             </p>
         </div>
         """,
-            width=1000,
+            width=1200,
             height=120,
         )
 
@@ -1180,7 +1105,7 @@ class InteractivePresentation:
 
         separator = Div(
             text="<hr style='border: 0; height: 1.5px; background-color: #E2D7C3; margin: 12px 0 20px 0;'>",
-            width=1000,
+            width=1200,
             height=15,
         )
 
