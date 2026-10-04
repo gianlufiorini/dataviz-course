@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>{{ title | e }}</title>
+
+        <!-- Google Fonts: Preconnect & Load Lusitania -->
+        <link rel="preconnect" href="https://fonts.googleapis.com">
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Lusitania:wght@400;700&display=swap">
+
+        {{ bokeh_css }}
+        {{ bokeh_js }}
+
+        <style>
+            /* 1. Global Page Reset & Fonts */
+            *, *::before, *::after {
+                box-sizing: border-box;
+            }
+
+            html, body {
+                background-color: #FDFCF7 !important;
+                font-family: 'Lusitania', Georgia, serif !important;
+                margin: 0 !important;
+                padding: 0 !important;
+                width: 100% !important;
+                min-height: 100vh !important;
+                overflow-x: hidden;
+            }
+
+            /* 2. Horizontal & Vertical Viewport Centering */
+            body {
+                display: flex !important;
+                justify-content: center !important;
+                align-items: flex-start !important;
+                padding: 20px 0 !important;
+            }
+
+            /* 3. Override Bokeh Layout Wrapper Centering */
+            .bk-root {
+                display: flex !important;
+                justify-content: center !important;
+                align-items: center !important;
+                width: 100% !important;
+                margin: 0 auto !important;
+                background-color: transparent !important;
+            }
+
+            .bk-root > .bk {
+                margin: 0 auto !important;
+            }
+
+            /* 4. Force Fixed-Width Inner Wrappers to Auto-Center */
+            .bk-layout-fixed {
+                margin-left: auto !important;
+                margin-right: auto !important;
+            }
+
+            /* 5. Font Uniformity for Form Elements */
+            .bk-root input, 
+            .bk-root select, 
+            .bk-root button, 
+            .bk-root textarea {
+                font-family: 'Lusitania', Georgia, serif !important;
+            }
+
+        </style>
+    </head>
+    <body>
+        {{ plot_div }}
+        {{ plot_script }}
+    </body>
+</html>

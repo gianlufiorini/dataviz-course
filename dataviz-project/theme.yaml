@@ -1,0 +1,49 @@
+# theme.yaml
+attrs:
+  figure:
+    background_fill_color: "#FFFFFF"        # Pure white plot canvas
+    border_fill_color: "#FDFCF7"            # Lighter off-white matching page background
+    outline_line_color: "#E6DEC3"          # Muted antique gold accent line
+    outline_line_width: 1
+    min_border_top: 40                      
+    min_border_bottom: 40
+    min_border_left: 40
+    min_border_right: 40
+  
+  # Title Typography
+  Title:
+    text_color: "#4A0E17"                   # Deeper, richer vintage Bordeaux red
+    text_font: "Lusitania"
+    text_font_style: "bold"
+    text_font_size: "20pt"                  
+    align: "left"                           
+    offset: 0
+  
+  # Structural Axis Lines & Typography
+  Axis:
+    axis_line_color: "#6E5B55"              
+    axis_line_width: 1.5
+    axis_label_text_font: "Lusitania"
+    axis_label_text_font_size: "12pt"       
+    axis_label_text_font_style: "normal"
+    axis_label_text_color: "#2C2221"        
+    major_label_text_font: "Lusitania"
+    major_label_text_font_size: "10pt"
+    major_label_text_color: "#6E5B55"
+    major_tick_line_color: "#6E5B55"
+    major_tick_line_width: 1.5
+    minor_tick_line_color: !!null           
+  
+  # Grid Lines
+  Grid:
+    grid_line_color: "#4A0E17"              
+    grid_line_alpha: 0.06                   
+    grid_line_width: 1
+  
+  # Pop-Up Tooltip Box
+  Tooltip:
+    background_fill_color: "#FFFFFF"
+    border_line_color: "#4A0E17"
+    border_line_width: 1
+    border_line_alpha: 0.4
+    attachment: "horizontal"
