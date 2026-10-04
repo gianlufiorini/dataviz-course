@@ -29,16 +29,23 @@ from bokeh.palettes import RdYlBu11, YlOrRd9
 from bokeh.transform import factor_cmap
 
 # ==============================================================================
-# CARICAMENTO E PROIEZIONE MAPPA (Robinson EPSG:54030)
+# CARICAMENTO E PROIEZIONE MAPPA (Robinson nativo tramite +proj=robin)
 # ==============================================================================
 base_dir = os.path.dirname(__file__)
 WORLD_PATH = os.path.join(base_dir, "data", "world-countries.json")
 
 try:
+    print(f"Tentativo di caricamento mappa da: {WORLD_PATH}")
     _world_raw = gpd.read_file(WORLD_PATH)
-    WORLD_GEO = _world_raw.to_crs("EPSG:54030")
-except Exception:
-    WORLD_GEO = None
+    WORLD_GEO = _world_raw.to_crs("+proj=robin")
+    print("Mappa caricata e proiettata con successo!")
+except Exception as e:
+    print(f"ERRORE nel caricamento della mappa: {e}")
+    try:
+        WORLD_GEO = _world_raw.to_crs("EPSG:4326")
+    except Exception:
+        WORLD_GEO = None
+
 
 class InteractivePresentation:
     """
@@ -293,14 +300,12 @@ class InteractivePresentation:
             width=1000,
         )
 
-        # Rating jittering
         rng = np.random.default_rng(123)
         df = self.df.copy()
         df["Rating_jittered"] = df["Rating"] + rng.normal(scale=0.02, size=len(df))
 
         kinds = ["Red", "White", "Rose", "Sparkling"]
 
-        # Exact user-specified hex colors
         wine_colors = {
             "Red": "#AF1B3F",
             "White": "#FFBC42",
@@ -308,7 +313,6 @@ class InteractivePresentation:
             "Sparkling": "#218380"
         }
 
-        # Helper function for Cubic Gamma Fit
         def compute_gamma_fit(sub_df, grid_points=100):
             valid = sub_df.dropna(subset=["Rating_jittered", "Price"])
             valid = valid[valid["Price"] > 0]
@@ -338,13 +342,11 @@ class InteractivePresentation:
             except Exception:
                 return dict(x_fit=[], y_fit=[])
 
-        # ColumnDataSources
         initial_kind = "Red"
         initial_df = df[df["Kind"] == initial_kind]
         source = ColumnDataSource(data=ColumnDataSource.from_df(initial_df))
         fit_source = ColumnDataSource(data=compute_gamma_fit(initial_df))
 
-        # Plot Setup
         p = figure(
             width=900,
             height=500,
@@ -361,7 +363,6 @@ class InteractivePresentation:
         p.grid.grid_line_color = "#EAE5DC"
         p.grid.grid_line_alpha = 0.8
 
-        # Scatter points
         scatter = p.scatter(
             x="Rating_jittered",
             y="Price",
@@ -373,7 +374,6 @@ class InteractivePresentation:
             line_width=0.5
         )
 
-        # Black Fit Line (#000000)
         fit_line = p.line(
             x="x_fit",
             y="y_fit",
@@ -385,7 +385,6 @@ class InteractivePresentation:
         p.legend.location = "top_left"
         p.legend.background_fill_alpha = 0.85
 
-        # Hover Tool
         hover = p.select_one(HoverTool)
         hover.renderers = [scatter]
 
@@ -408,7 +407,6 @@ class InteractivePresentation:
         hover.point_policy = "snap_to_data"
         hover.mode = "mouse"
 
-        # Toggle Controls
         toggle = RadioGroup(
             labels=kinds,
             active=0,
@@ -424,7 +422,6 @@ class InteractivePresentation:
             source.data = ColumnDataSource.from_df(new_df)
             fit_source.data = compute_gamma_fit(new_df)
 
-            # Update scatter point color using user-defined hex colors
             scatter.glyph.fill_color = wine_colors[selected_kind]
             scatter.glyph.line_color = wine_colors[selected_kind]
 
@@ -459,17 +456,14 @@ class InteractivePresentation:
 
         options = ["Global", "Red", "White", "Rose", "Sparkling"]
 
-        # Calculation of Map Aspect Ratio to eliminate map distortion
-        bounds = WORLD_GEO.total_bounds  # [minx, miny, maxx, maxy]
-        x_bounds = (bounds[0], bounds[2])
-        y_bounds = (bounds[1], bounds[3])
+        bounds = WORLD_GEO.total_bounds
         geo_width = bounds[2] - bounds[0]
         geo_height = bounds[3] - bounds[1]
         map_aspect = geo_width / geo_height if geo_height != 0 else 2.0
 
-        # ==========================================================================
-        # GENERATORI DATI GEOJSON SEPARATI
-        # ==========================================================================
+        x_bounds = (float(bounds[0]), float(bounds[2]))
+        y_bounds = (float(bounds[1]), float(bounds[3]))
+
         def get_price_geojson(wine_type):
             df_sub = self.df if wine_type == "Global" else self.df[self.df["Kind"] == wine_type]
             stats = df_sub.groupby("Country")["Price"].agg(
@@ -500,13 +494,9 @@ class InteractivePresentation:
                 merged[["Rating_Mean", "Rating_Median", "Rating_Min", "Rating_Max", "Count"]].fillna("N/A")
             return merged[["geometry", "name", "Rating_Mean", "Rating_Median", "Rating_Min", "Rating_Max", "Count"]].to_json()
 
-        # GeoJSONDataSources distinti ed indipendenti
         price_source = GeoJSONDataSource(geojson=get_price_geojson("Global"))
         rating_source = GeoJSONDataSource(geojson=get_rating_geojson("Global"))
 
-        # ==========================================================================
-        # COLOR MAPPERS
-        # ==========================================================================
         p_means = self.df.groupby("Country")["Price"].mean()
         price_mapper = LinearColorMapper(
             palette=YlOrRd9[::-1],
@@ -520,15 +510,12 @@ class InteractivePresentation:
         r_max = float(r_means.max()) if not r_means.empty else 5.0
 
         rating_mapper = LinearColorMapper(
-            palette=RdYlBu11[::-1],  # Invertito: Indici alti = Blu (Alto rating), Bassi = Rosso
+            palette=RdYlBu11[::-1],
             low=r_min,
             high=r_max,
             nan_color="#EBEBEB"
         )
 
-        # ==========================================================================
-        # DIV DETTAGLIO INTERATTIVO (CLICK)
-        # ==========================================================================
         default_panel_style = (
             "padding: 12px 16px; border-radius: 8px; background-color: #F9F9FB; "
             "border: 1px solid #E2E8F0; font-family: sans-serif; min-height: 75px;"
@@ -554,9 +541,6 @@ class InteractivePresentation:
             width=560,
         )
 
-        # ==========================================================================
-        # 1. FIGURA MAPPA PREZZO
-        # ==========================================================================
         p_price = figure(
             width=560,
             height=360,
@@ -567,7 +551,6 @@ class InteractivePresentation:
             x_range=x_bounds,
             y_range=y_bounds,
             match_aspect=True,
-            aspect_scale_mode="fit",
             aspect_ratio=map_aspect,
         )
         p_price.background_fill_color = "#FAFAFA"
@@ -604,9 +587,6 @@ class InteractivePresentation:
         )
         p_price.add_layout(cb_price, "right")
 
-        # ==========================================================================
-        # 2. FIGURA MAPPA RATING
-        # ==========================================================================
         p_rating = figure(
             width=560,
             height=360,
@@ -617,7 +597,6 @@ class InteractivePresentation:
             x_range=p_price.x_range,
             y_range=p_price.y_range,
             match_aspect=True,
-            aspect_scale_mode="fit",
             aspect_ratio=map_aspect,
         )
         p_rating.background_fill_color = "#FAFAFA"
@@ -654,9 +633,6 @@ class InteractivePresentation:
         )
         p_rating.add_layout(cb_rating, "right")
 
-        # ==========================================================================
-        # CALLBACK JS PER GESTIRE IL CLICK ESCLUSIVO SU OGNI MAPPA
-        # ==========================================================================
         price_tap_js = CustomJS(args={'src': price_source, 'div': price_info_div}, code="""
             const indices = src.selected.indices;
             if (indices.length === 0) return;
@@ -722,9 +698,6 @@ class InteractivePresentation:
         price_source.selected.js_on_change('indices', price_tap_js)
         rating_source.selected.js_on_change('indices', rating_tap_js)
 
-        # ==========================================================================
-        # SELETTORE E AGGIORNAMENTO DINAMICO
-        # ==========================================================================
         select_wine = Select(
             title="Filtra Categoria Vino:",
             value="Global",
@@ -742,7 +715,6 @@ class InteractivePresentation:
 
         select_wine.on_change("value", update_maps)
 
-        # Layout finale pulito ed affiancato
         controls_row = row(select_wine, align="center", margin=(0, 0, 15, 0))
         maps_row = row(p_price, p_rating)
         info_row = row(price_info_div, rating_info_div)
