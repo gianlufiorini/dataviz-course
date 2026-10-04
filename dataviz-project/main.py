@@ -1,6 +1,8 @@
 #!/usr/bin/env python
 import base64
+import json
 import os
+import geopandas as gpd
 import numpy as np
 import pandas as pd
 import statsmodels.api as sm
@@ -18,11 +20,25 @@ from bokeh.models import (
     ColorBar,
     BasicTicker,
     PrintfTickFormatter,
+    CustomJS,
+    GeoJSONDataSource,
+    TapTool,
 )
 from bokeh.layouts import column, row, layout
-from bokeh.palettes import RdYlBu11
+from bokeh.palettes import RdYlBu11, YlOrRd9
 from bokeh.transform import factor_cmap
 
+# ==============================================================================
+# CARICAMENTO E PROIEZIONE MAPPA (Robinson EPSG:54030)
+# ==============================================================================
+base_dir = os.path.dirname(__file__)
+WORLD_PATH = os.path.join(base_dir, "data", "world-countries.json")
+
+try:
+    _world_raw = gpd.read_file(WORLD_PATH)
+    WORLD_GEO = _world_raw.to_crs("EPSG:54030")
+except Exception:
+    WORLD_GEO = None
 
 class InteractivePresentation:
     """
@@ -38,7 +54,7 @@ class InteractivePresentation:
         # Load dataset
         self.df = pd.read_csv(data_path)
         self.current_slide = 0
-        self.total_slides = 7
+        self.total_slides = 8
         self.slides = []
         self.auto_play = False
         self.auto_play_callback = None
@@ -202,7 +218,7 @@ class InteractivePresentation:
         titles = [
             "Welcome",
             "Price vs Rating (Cubic Gamma GLM)",
-            "Visual Vocabulary",
+            "Geographic Wine Analysis",
             "Data Overview",
             "Interactive Analysis",
             "Time Series Trends",
@@ -418,57 +434,325 @@ class InteractivePresentation:
         return layout([[title], [toggle_container], [p]])
 
     def create_slide_2_visual_vocabulary(self):
-        """Slide 2: Visual Vocabulary"""
+        """Slide: Geographic Wine Analysis (Price: Yellow-Red, Rating: Blue-Yellow-Red Divergent)"""
         title = Div(
             text="""
-        <h1 style="text-align: center; color: #AF1B3F; font-family: 'Lusitania', serif;">
-            📊 Visual Vocabulary - Financial Times Guide
-        </h1>
-        <p style="text-align: center; font-size: 16px; color: #5C4A42;">
-            A comprehensive guide to selecting the right chart type for your data story
-        </p>
-        """,
-            width=1000,
-            height=100,
-        )
-
-        image_path = os.path.join(
-            os.path.dirname(__file__), "visual-vocabulary-ft.png"
-        )
-        image_html = ""
-
-        if os.path.exists(image_path):
-            with open(image_path, "rb") as img_file:
-                encoded_string = base64.b64encode(img_file.read()).decode()
-                image_html = f"""
-        <div style="text-align: center; margin: 10px auto;">
-            <img src="data:image/png;base64,{encoded_string}" 
-                 style="max-width: 100%; height: auto; max-height: 550px; border: 1px solid #E2D7C3; border-radius: 6px; box-shadow: 0 4px 10px rgba(175, 27, 63, 0.06);"
-                 alt="Visual Vocabulary - Financial Times">
-        </div>
-        """
-        else:
-            image_html = """
-        <div style="text-align: center; margin: 20px auto; padding: 50px; background-color: #FFFFFF; border: 1px solid #E2D7C3; border-radius: 8px;">
-            <h3 style="color: #AF1B3F;">Visual Vocabulary Image</h3>
-            <p>Image file not found: visual-vocabulary-ft.png</p>
-        </div>
-        """
-
-        image_div = Div(text=image_html, width=1000, height=580)
-
-        info_panel = Div(
-            text="""
-        <div style="background-color: #FFFFFF; border: 1px solid #E2D7C3; padding: 15px 20px; border-radius: 8px; color: #211B18;">
-            <h3 style="color: #AF1B3F; margin-top: 0;">📌 About the Visual Vocabulary</h3>
-            <p style="margin-bottom: 0;">The Financial Times Visual Vocabulary is a poster and guide that helps you select the most appropriate chart type based on the story you want to tell with your data.</p>
+        <div style="text-align: center; font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; margin-bottom: 10px;">
+            <h2 style="color: #4A0E17; font-size: 24px; margin-bottom: 4px; font-weight: 700;">
+                🌍 Geographic Wine Analysis: Price & Rating by Country
+            </h2>
+            <p style="color: #6E5B55; font-size: 13px; margin: 0;">
+                Seleziona la categoria di vino per aggiornare le mappe. 
+                <b>Passa il mouse</b> per l'anteprima rapida o <b>clicca uno stato</b> per visualizzare le statistiche dettagliate nello specifico pannello sottostante.
+            </p>
         </div>
         """,
-            width=1000,
-            height=100,
+            width=1150,
         )
 
-        return layout([[title], [image_div], [info_panel]])
+        if WORLD_GEO is None or WORLD_GEO.empty:
+            error_div = Div(
+                text="<p style='color: #4A0E17; text-align: center;'>Impossibile caricare le geometrie dei paesi del mondo.</p>",
+                width=1150
+            )
+            return layout([[title], [error_div]])
+
+        options = ["Global", "Red", "White", "Rose", "Sparkling"]
+
+        # Calculation of Map Aspect Ratio to eliminate map distortion
+        bounds = WORLD_GEO.total_bounds  # [minx, miny, maxx, maxy]
+        x_bounds = (bounds[0], bounds[2])
+        y_bounds = (bounds[1], bounds[3])
+        geo_width = bounds[2] - bounds[0]
+        geo_height = bounds[3] - bounds[1]
+        map_aspect = geo_width / geo_height if geo_height != 0 else 2.0
+
+        # ==========================================================================
+        # GENERATORI DATI GEOJSON SEPARATI
+        # ==========================================================================
+        def get_price_geojson(wine_type):
+            df_sub = self.df if wine_type == "Global" else self.df[self.df["Kind"] == wine_type]
+            stats = df_sub.groupby("Country")["Price"].agg(
+                Price_Mean="mean",
+                Price_Median="median",
+                Price_Min="min",
+                Price_Max="max",
+                Count="count"
+            ).round(2).reset_index()
+
+            merged = WORLD_GEO.merge(stats, how="left", left_on="name", right_on="Country")
+            merged[["Price_Mean", "Price_Median", "Price_Min", "Price_Max", "Count"]] = \
+                merged[["Price_Mean", "Price_Median", "Price_Min", "Price_Max", "Count"]].fillna("N/A")
+            return merged[["geometry", "name", "Price_Mean", "Price_Median", "Price_Min", "Price_Max", "Count"]].to_json()
+
+        def get_rating_geojson(wine_type):
+            df_sub = self.df if wine_type == "Global" else self.df[self.df["Kind"] == wine_type]
+            stats = df_sub.groupby("Country")["Rating"].agg(
+                Rating_Mean="mean",
+                Rating_Median="median",
+                Rating_Min="min",
+                Rating_Max="max",
+                Count="count"
+            ).round(2).reset_index()
+
+            merged = WORLD_GEO.merge(stats, how="left", left_on="name", right_on="Country")
+            merged[["Rating_Mean", "Rating_Median", "Rating_Min", "Rating_Max", "Count"]] = \
+                merged[["Rating_Mean", "Rating_Median", "Rating_Min", "Rating_Max", "Count"]].fillna("N/A")
+            return merged[["geometry", "name", "Rating_Mean", "Rating_Median", "Rating_Min", "Rating_Max", "Count"]].to_json()
+
+        # GeoJSONDataSources distinti ed indipendenti
+        price_source = GeoJSONDataSource(geojson=get_price_geojson("Global"))
+        rating_source = GeoJSONDataSource(geojson=get_rating_geojson("Global"))
+
+        # ==========================================================================
+        # COLOR MAPPERS
+        # ==========================================================================
+        p_means = self.df.groupby("Country")["Price"].mean()
+        price_mapper = LinearColorMapper(
+            palette=YlOrRd9[::-1],
+            low=float(p_means.min()) if not p_means.empty else 0.0,
+            high=float(p_means.max()) if not p_means.empty else 100.0,
+            nan_color="#EBEBEB"
+        )
+
+        r_means = self.df.groupby("Country")["Rating"].mean()
+        r_min = float(r_means.min()) if not r_means.empty else 3.0
+        r_max = float(r_means.max()) if not r_means.empty else 5.0
+
+        rating_mapper = LinearColorMapper(
+            palette=RdYlBu11[::-1],  # Invertito: Indici alti = Blu (Alto rating), Bassi = Rosso
+            low=r_min,
+            high=r_max,
+            nan_color="#EBEBEB"
+        )
+
+        # ==========================================================================
+        # DIV DETTAGLIO INTERATTIVO (CLICK)
+        # ==========================================================================
+        default_panel_style = (
+            "padding: 12px 16px; border-radius: 8px; background-color: #F9F9FB; "
+            "border: 1px solid #E2E8F0; font-family: sans-serif; min-height: 75px;"
+        )
+
+        price_info_div = Div(
+            text=f"""
+            <div style="{default_panel_style}">
+                <h4 style="margin: 0 0 4px 0; color: #4A0E17; font-size: 14px;">🍷 Statistiche Prezzo</h4>
+                <p style="margin: 0; color: #64748B; font-size: 12px;">Clicca su uno stato nella mappa del <b>Prezzo</b> per vederne i dettagli analitici.</p>
+            </div>
+            """,
+            width=560,
+        )
+
+        rating_info_div = Div(
+            text=f"""
+            <div style="{default_panel_style}">
+                <h4 style="margin: 0 0 4px 0; color: #1E3A8A; font-size: 14px;">⭐ Statistiche Rating</h4>
+                <p style="margin: 0; color: #64748B; font-size: 12px;">Clicca su uno stato nella mappa del <b>Rating</b> per vederne i dettagli analitici.</p>
+            </div>
+            """,
+            width=560,
+        )
+
+        # ==========================================================================
+        # 1. FIGURA MAPPA PREZZO
+        # ==========================================================================
+        p_price = figure(
+            width=560,
+            height=360,
+            title="Prezzo Medio del Vino per Paese (€)",
+            tools="pan,wheel_zoom,reset,tap,save",
+            x_axis_location=None,
+            y_axis_location=None,
+            x_range=x_bounds,
+            y_range=y_bounds,
+            match_aspect=True,
+            aspect_scale_mode="fit",
+            aspect_ratio=map_aspect,
+        )
+        p_price.background_fill_color = "#FAFAFA"
+        p_price.border_fill_color = "#FFFFFF"
+        p_price.grid.grid_line_color = None
+
+        price_patches = p_price.patches(
+            "xs", "ys",
+            source=price_source,
+            fill_color={"field": "Price_Mean", "transform": price_mapper},
+            fill_alpha=0.9,
+            line_color="#FFFFFF",
+            line_width=0.6,
+            nonselection_fill_alpha=0.7,
+            nonselection_fill_color={"field": "Price_Mean", "transform": price_mapper},
+        )
+
+        p_price.add_tools(HoverTool(
+            renderers=[price_patches],
+            tooltips=[
+                ("Paese", "@name"),
+                ("Prezzo Medio", "€@Price_Mean"),
+                ("Vini Registrati", "@Count"),
+            ]
+        ))
+
+        cb_price = ColorBar(
+            color_mapper=price_mapper,
+            width=10,
+            location=(0, 0),
+            title="€",
+            title_text_font_size="9pt",
+            label_standoff=4,
+        )
+        p_price.add_layout(cb_price, "right")
+
+        # ==========================================================================
+        # 2. FIGURA MAPPA RATING
+        # ==========================================================================
+        p_rating = figure(
+            width=560,
+            height=360,
+            title="Rating Medio del Vino per Paese (Divergente: Blu-Rosso)",
+            tools="pan,wheel_zoom,reset,tap,save",
+            x_axis_location=None,
+            y_axis_location=None,
+            x_range=p_price.x_range,
+            y_range=p_price.y_range,
+            match_aspect=True,
+            aspect_scale_mode="fit",
+            aspect_ratio=map_aspect,
+        )
+        p_rating.background_fill_color = "#FAFAFA"
+        p_rating.border_fill_color = "#FFFFFF"
+        p_rating.grid.grid_line_color = None
+
+        rating_patches = p_rating.patches(
+            "xs", "ys",
+            source=rating_source,
+            fill_color={"field": "Rating_Mean", "transform": rating_mapper},
+            fill_alpha=0.9,
+            line_color="#FFFFFF",
+            line_width=0.6,
+            nonselection_fill_alpha=0.7,
+            nonselection_fill_color={"field": "Rating_Mean", "transform": rating_mapper},
+        )
+
+        p_rating.add_tools(HoverTool(
+            renderers=[rating_patches],
+            tooltips=[
+                ("Paese", "@name"),
+                ("Rating Medio", "@Rating_Mean ⭐"),
+                ("Vini Registrati", "@Count"),
+            ]
+        ))
+
+        cb_rating = ColorBar(
+            color_mapper=rating_mapper,
+            width=10,
+            location=(0, 0),
+            title="⭐",
+            title_text_font_size="9pt",
+            label_standoff=4,
+        )
+        p_rating.add_layout(cb_rating, "right")
+
+        # ==========================================================================
+        # CALLBACK JS PER GESTIRE IL CLICK ESCLUSIVO SU OGNI MAPPA
+        # ==========================================================================
+        price_tap_js = CustomJS(args={'src': price_source, 'div': price_info_div}, code="""
+            const indices = src.selected.indices;
+            if (indices.length === 0) return;
+            
+            const idx = indices[0];
+            const data = JSON.parse(src.geojson).features[idx].properties;
+            
+            if (data.Price_Mean === "N/A" || data.Price_Mean === null) {
+                div.text = `
+                <div style="padding: 12px 16px; border-radius: 8px; background-color: #FEF2F2; border: 1px solid #FCA5A5; font-family: sans-serif;">
+                    <h4 style="margin:0 0 2px 0; color: #991B1B;">📍 ${data.name}</h4>
+                    <p style="margin:0; color: #7F1D1D; font-size: 12px;">Nessun dato sul prezzo disponibile per questo paese.</p>
+                </div>`;
+                return;
+            }
+
+            div.text = `
+            <div style="padding: 12px 16px; border-radius: 8px; background-color: #FFFBEB; border: 1px solid #FCD34D; font-family: sans-serif;">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 6px;">
+                    <h3 style="margin:0; color: #78350F; font-size: 15px;">🍷 <b>${data.name}</b> — Analisi Prezzi</h3>
+                    <span style="font-size:11px; background:#FEF3C7; padding: 2px 8px; border-radius:12px; color:#92400E; font-weight:bold;">Trovati: ${data.Count} vini</span>
+                </div>
+                <div style="display: flex; gap: 18px; font-size: 13px; color: #451A03;">
+                    <div><b>Medio:</b> €${data.Price_Mean}</div>
+                    <div><b>Mediano:</b> €${data.Price_Median}</div>
+                    <div><b>Min:</b> €${data.Price_Min}</div>
+                    <div><b>Max:</b> €${data.Price_Max}</div>
+                </div>
+            </div>`;
+        """)
+
+        rating_tap_js = CustomJS(args={'src': rating_source, 'div': rating_info_div}, code="""
+            const indices = src.selected.indices;
+            if (indices.length === 0) return;
+            
+            const idx = indices[0];
+            const data = JSON.parse(src.geojson).features[idx].properties;
+            
+            if (data.Rating_Mean === "N/A" || data.Rating_Mean === null) {
+                div.text = `
+                <div style="padding: 12px 16px; border-radius: 8px; background-color: #FEF2F2; border: 1px solid #FCA5A5; font-family: sans-serif;">
+                    <h4 style="margin:0 0 2px 0; color: #991B1B;">📍 ${data.name}</h4>
+                    <p style="margin:0; color: #7F1D1D; font-size: 12px;">Nessun dato sul rating disponibile per questo paese.</p>
+                </div>`;
+                return;
+            }
+
+            div.text = `
+            <div style="padding: 12px 16px; border-radius: 8px; background-color: #EFF6FF; border: 1px solid #93C5FD; font-family: sans-serif;">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 6px;">
+                    <h3 style="margin:0; color: #1E3A8A; font-size: 15px;">⭐ <b>${data.name}</b> — Analisi Ratings</h3>
+                    <span style="font-size:11px; background:#DBEAFE; padding: 2px 8px; border-radius:12px; color:#1E40AF; font-weight:bold;">Trovati: ${data.Count} vini</span>
+                </div>
+                <div style="display: flex; gap: 18px; font-size: 13px; color: #1E3A8A;">
+                    <div><b>Medio:</b> ${data.Rating_Mean} ⭐</div>
+                    <div><b>Mediano:</b> ${data.Rating_Median} ⭐</div>
+                    <div><b>Min:</b> ${data.Rating_Min} ⭐</div>
+                    <div><b>Max:</b> ${data.Rating_Max} ⭐</div>
+                </div>
+            </div>`;
+        """)
+
+        price_source.selected.js_on_change('indices', price_tap_js)
+        rating_source.selected.js_on_change('indices', rating_tap_js)
+
+        # ==========================================================================
+        # SELETTORE E AGGIORNAMENTO DINAMICO
+        # ==========================================================================
+        select_wine = Select(
+            title="Filtra Categoria Vino:",
+            value="Global",
+            options=options,
+            width=240,
+        )
+
+        def update_maps(attr, old, new):
+            price_source.geojson = get_price_geojson(new)
+            rating_source.geojson = get_rating_geojson(new)
+
+            title_suffix = f"({new})" if new != "Global" else "(Tutti i Vini)"
+            p_price.title.text = f"Prezzo Medio del Vino per Paese {title_suffix}"
+            p_rating.title.text = f"Rating Medio del Vino per Paese {title_suffix}"
+
+        select_wine.on_change("value", update_maps)
+
+        # Layout finale pulito ed affiancato
+        controls_row = row(select_wine, align="center", margin=(0, 0, 15, 0))
+        maps_row = row(p_price, p_rating)
+        info_row = row(price_info_div, rating_info_div)
+
+        return layout([
+            [title],
+            [controls_row],
+            [maps_row],
+            [info_row]
+        ])
 
     def create_slide_3_overview(self):
         """Slide 3: Data Overview Dashboard"""
