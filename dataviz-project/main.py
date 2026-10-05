@@ -5,7 +5,6 @@ import os
 import geopandas as gpd
 import numpy as np
 import pandas as pd
-import statsmodels.api as sm
 
 from bokeh.plotting import figure, curdoc
 from bokeh.models import (
@@ -16,6 +15,7 @@ from bokeh.models import (
     Select,
     ColumnDataSource,
     HoverTool,
+    Range1d,
     LinearColorMapper,
     ColorBar,
     BasicTicker,
@@ -389,14 +389,14 @@ class InteractivePresentation:
         return self.stack([[title_banner]])
 
     def create_slide_1_price_vs_rating(self):
-        """Slide 1: Scatter plot of price vs rating with Cubic Gamma GLM Fit (Log Link)"""
+        """Slide 1: Scatter plot of price vs rating with an identity reference line"""
         title = Div(
             text="""
              <h2 style="text-align: center; color: #AF1B3F; font-family: 'Lusitana', serif; margin-bottom: 5px;">
                 Average Rating vs. Price
             </h2>
             <p style="text-align: center; color: #5C4A42; font-size: 14px; margin-top: 0; margin-bottom: 15px;">
-                    Select a wine category below to inspect rating and price distribution alongside a Cubic Gamma Regression fit (Log Link).
+                    Select a wine category below to inspect rating and price distribution alongside an identity reference line (the diagonal of the plot).
             </p>
             """,
             sizing_mode="stretch_width",
@@ -416,47 +416,21 @@ class InteractivePresentation:
             "Sparkling": "#218380"
         }
 
-        def compute_gamma_fit(sub_df, grid_points=100):
-            valid = sub_df.dropna(subset=["Rating_jittered", "Price"])
-            valid = valid[valid["Price"] > 0]
-
-            if len(valid) < 4:
-                return dict(x_fit=[], y_fit=[])
-
-            x_vals = valid["Rating_jittered"].values
-            y_vals = valid["Price"].values
-
-            X = np.column_stack([x_vals, x_vals**2, x_vals**3])
-            X = sm.add_constant(X)
-
-            try:
-                gamma_model = sm.GLM(
-                    endog=y_vals,
-                    exog=X,
-                    family=sm.families.Gamma(link=sm.families.links.Log()),
-                ).fit()
-
-                x_grid = np.linspace(x_vals.min(), x_vals.max(), grid_points)
-                X_grid = np.column_stack([x_grid, x_grid**2, x_grid**3])
-                X_grid = sm.add_constant(X_grid)
-
-                y_fit = gamma_model.predict(X_grid)
-                return dict(x_fit=x_grid, y_fit=y_fit)
-            except Exception:
-                return dict(x_fit=[], y_fit=[])
-
         initial_kind = "Red"
         initial_df = df[df["Kind"] == initial_kind]
         source = ColumnDataSource(data=ColumnDataSource.from_df(initial_df))
-        fit_source = ColumnDataSource(data=compute_gamma_fit(initial_df))
+
+        # Identity line: the plot's own diagonal (bottom-left to top-right corner).
+        # Endpoints are filled in once the fixed axis ranges are set below.
+        identity_source = ColumnDataSource(data=dict(x=[], y=[]))
 
         p = figure(
-            width=1000,
-            height=520,
+            width=1150,
+            height=650,
             title=f"{initial_kind} Wine",
-            y_axis_type="log",
-            x_axis_label="Average Rating",
-            y_axis_label="Price (€)",
+            x_axis_type="log",
+            x_axis_label="Price (€)",
+            y_axis_label="Average Rating",
             tools="pan,wheel_zoom,reset,hover,save",
             align="center",
         )
@@ -470,8 +444,8 @@ class InteractivePresentation:
         p.grid.grid_line_alpha = 0.8
 
         scatter = p.scatter(
-            x="Rating_jittered",
-            y="Price",
+            x="Price",
+            y="Rating_jittered",
             source=source,
             color=wine_colors[initial_kind],
             alpha=0.7,
@@ -480,15 +454,38 @@ class InteractivePresentation:
             line_width=0.5
         )
 
-        fit_line = p.line(
-            x="x_fit",
-            y="y_fit",
-            source=fit_source,
+        identity_line = p.line(
+            x="x",
+            y="y",
+            source=identity_source,
             color="#000000",
-            line_width=3,
-            legend_label="Cubic Gamma GLM Fit"
+            alpha=0.35,
+            line_width=1,
+            line_dash=[6, 4],
+            legend_label="Identity line"
         )
-        
+
+        # Fixed axes: the same ranges for every wine category, taken from the
+        # whole dataset so they never change when the toggle is used.
+        # x (log price): pad multiplicatively so the padding is even on screen.
+        x_min = df.loc[df["Price"] > 0, "Price"].min()
+        x_max = df["Price"].max()
+        x_pad = (x_max / x_min) ** 0.03
+        p.x_range = Range1d(x_min / x_pad, x_max * x_pad)
+
+        # y (rating): linear padding.
+        y_min = df["Rating_jittered"].min()
+        y_max = df["Rating_jittered"].max()
+        y_pad = 0.05 * (y_max - y_min)
+        p.y_range = Range1d(y_min - y_pad, y_max + y_pad)
+
+        # Diagonal from corner to corner of the fixed plot area. A line between
+        # two points is straight on screen even with the log x-axis.
+        identity_source.data = dict(
+            x=[p.x_range.start, p.x_range.end],
+            y=[p.y_range.start, p.y_range.end],
+        )
+
         p.legend.location = "top_left"
         p.legend.background_fill_alpha = 0.85
 
@@ -530,7 +527,6 @@ class InteractivePresentation:
 
             new_df = df[df["Kind"] == selected_kind]
             source.data = ColumnDataSource.from_df(new_df)
-            fit_source.data = compute_gamma_fit(new_df)
 
             scatter.glyph.fill_color = wine_colors[selected_kind]
             scatter.glyph.line_color = wine_colors[selected_kind]
