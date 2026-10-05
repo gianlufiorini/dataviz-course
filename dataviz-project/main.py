@@ -22,10 +22,19 @@ from bokeh.models import (
     PrintfTickFormatter,
     CustomJS,
     GeoJSONDataSource,
+    LayoutDOM,
+    Widget,
+    InlineStyleSheet,
 )
-from bokeh.layouts import column, row, layout
+from bokeh.layouts import column, row
 from bokeh.palettes import RdYlBu11, YlOrRd9
 from bokeh.transform import factor_cmap
+from bokeh.themes import Theme
+
+# Fixed slide width: everything is centered inside this column instead of
+# stretching across the full browser window.
+SLIDE_WIDTH = 1200
+CONTENT_WIDTH = 1160  # width of full-width text blocks (titles, banners)
 
 # ==============================================================================
 # MAP LOADING AND PROJECTION (Native Robinson via +proj=robin)
@@ -46,12 +55,73 @@ except Exception as e:
         WORLD_GEO = None
 
 
+# Injected into every widget's shadow DOM (page-level CSS cannot reach inside it)
+# so button groups, radio buttons, dropdown titles and slider titles are centered.
+WIDGET_CENTER_CSS = """/*center*/
+:host { text-align: center; }
+.bk-btn { justify-content: center; text-align: center; }
+.bk-btn-group { justify-content: center; }
+.bk-input-group { justify-content: center; text-align: center; }
+.bk-input-group label { text-align: center; }
+.bk-slider-title { justify-content: center; text-align: center; }
+"""
+
+
+def _merge_styles(model, extra):
+    current = model.styles if isinstance(model.styles, dict) else {}
+    model.styles = {**current, **extra}
+
+
+def center_everything(root, is_root=False):
+    """Centers every layout element horizontally, and all text inside Divs.
+
+    Three independent mechanisms are used, all pushing the same direction so they
+    can never fight each other:
+      * Columns get  align-items: center   (children centered horizontally)
+      * Rows get     justify-content: center (children centered horizontally)
+      * Every child gets align="center" (Bokeh's own align-self centering)
+      * Divs get text-align: center (inherited by the text inside the shadow DOM)
+    Full-width Divs get an explicit width instead of stretch_width, because a
+    stretched Div combined with align="center" shrinks to its content.
+    """
+    from bokeh.models import Column, Row
+
+    for model in root.references():
+        if not isinstance(model, LayoutDOM):
+            continue
+
+        if isinstance(model, Div):
+            if model.sizing_mode in ("stretch_width", "stretch_both"):
+                model.sizing_mode = None
+                model.width = CONTENT_WIDTH
+            _merge_styles(model, {"text-align": "center"})
+        elif isinstance(model, Column):
+            _merge_styles(model, {"align-items": "center"})
+        elif isinstance(model, Row):
+            _merge_styles(model, {"justify-content": "center"})
+
+        if isinstance(model, Widget) and not any(
+            isinstance(sheet, InlineStyleSheet) and "/*center*/" in sheet.css
+            for sheet in model.stylesheets
+        ):
+            model.stylesheets = [
+                *model.stylesheets,
+                InlineStyleSheet(css=WIDGET_CENTER_CSS),
+            ]
+
+        if model is not root:
+            model.align = "center"
+
+
 class InteractivePresentation:
     """
     Main application class for the Bokeh presentation system.
-    Styled with crisp white plot containers, warm parchment background (#F7F5F0),
-    user-specified hex colors for wine categories, and a black regression line.
+    Styled with crisp white plot containers, off-white background (#FDFCF7),
+    user-specified hex colors for wine categories, and centered text/layouts.
     """
+
+    theme_path = os.path.join(base_dir, "theme.yaml")
+    curdoc().theme = Theme(filename=theme_path)
 
     def __init__(self, filename="wines_enhanced.csv"):
         base_dir = os.path.dirname(__file__)
@@ -69,50 +139,82 @@ class InteractivePresentation:
         self.create_navigation()
         self.create_layout()
 
+    def stack(self, rows):
+        """Stack rows of items vertically. A row with several items becomes a Row."""
+        return column(
+            *[
+                row(*r, width=CONTENT_WIDTH, styles={"justify-content": "center"})
+                for r in rows
+            ],
+            sizing_mode="stretch_width",
+        )
+
     def create_navigation(self):
-        """Create themed navigation controls matching wine palette"""
+        """Create themed navigation controls matching wine palette and centering rules"""
 
         self.style_div = Div(
             text="""
         <style>
-            @import url('https://fonts.googleapis.com/css2?family=Lusitania:wght@400;700&display=swap');
+            @import url('https://fonts.googleapis.com/css2?family=Lusitana:wght@400;700&display=swap');
 
             /* Global Page Background & Centering Overrides */
             html, body {
-                background-color: #F7F5F0 !important;
-                font-family: 'Lusitania', Georgia, serif !important;
+                background-color: #FDFCF7 !important;
+                font-family: 'Lusitana', Georgia, serif !important;
                 margin: 0 !important;
                 padding: 0 !important;
                 width: 100% !important;
+                min-height: 100vh !important;
             }
 
             /* Center Bokeh container and all inner layout components */
             .bk-root {
-                background-color: #F7F5F0 !important;
+                background-color: transparent !important;
                 width: 100% !important;
                 display: flex !important;
+                flex-direction: column !important;
+                align-items: center !important;
                 justify-content: center !important;
                 margin: 0 auto !important;
-                padding-top: 20px !important;
             }
 
-            .bk-root > .bk {
-                margin: 0 auto !important;
+            .bk-root > .bk,
+            .bk-root .bk-Column,
+            .bk-root .bk-Row,
+            .bk-root .bk-layout-fixed,
+            .bk-root .bk-content,
+            .bk-root .bk-Control {
+                margin-left: auto !important;
+                margin-right: auto !important;
+                align-self: center !important;
             }
 
-            /* Force fixed layout blocks to auto-center */
-            .bk-layout-fixed {
+            /* Force text-align centering for all inner text and div containers */
+            .bk-root, .bk-root *, .bk-content, .bk-content * {
+                text-align: center !important;
+            }
+
+            .bk-root h1, .bk-root h2, .bk-root h3, .bk-root h4, .bk-root p, 
+            .bk-root div, .bk-root span, .bk-root td, .bk-root th, 
+            .bk-root ul, .bk-root li {
+                text-align: center !important;
                 margin-left: auto !important;
                 margin-right: auto !important;
             }
 
+            .bk-root div.bk > div {
+                margin-left: auto !important;
+                margin-right: auto !important;
+                text-align: center !important;
+            }
+
             .bk-root input, .bk-root select, .bk-root button, .bk-root textarea {
-                font-family: 'Lusitania', Georgia, serif !important;
+                font-family: 'Lusitana', Georgia, serif !important;
             }
 
             /* Theme Buttons */
             .theme-btn button.bk-btn {
-                font-family: 'Lusitania', Georgia, serif !important;
+                font-family: 'Lusitana', Georgia, serif !important;
                 font-weight: bold !important;
                 background-color: #FFFFFF !important;
                 color: #AF1B3F !important;
@@ -133,7 +235,7 @@ class InteractivePresentation:
             }
 
             .theme-btn button.bk-btn:disabled {
-                background-color: #F7F5F0 !important;
+                background-color: #FDFCF7 !important;
                 color: #C2B8B2 !important;
                 border-color: #E2D7C3 !important;
                 opacity: 0.65 !important;
@@ -149,7 +251,7 @@ class InteractivePresentation:
 
             /* Dropdown Selector Styling */
             .theme-select select {
-                font-family: 'Lusitania', Georgia, serif !important;
+                font-family: 'Lusitana', Georgia, serif !important;
                 background-color: #FFFFFF !important;
                 color: #211B18 !important;
                 border: 1.5px solid #AF1B3F !important;
@@ -166,11 +268,13 @@ class InteractivePresentation:
             }
 
             .theme-select label {
-                font-family: 'Lusitania', Georgia, serif !important;
+                font-family: 'Lusitana', Georgia, serif !important;
                 color: #AF1B3F !important;
                 font-weight: bold !important;
                 font-size: 13px !important;
                 letter-spacing: 0.3px !important;
+                text-align: center !important;
+                display: block !important;
             }
         </style>
         """,
@@ -179,20 +283,20 @@ class InteractivePresentation:
         )
 
         self.prev_button = Button(
-            label="◀ Previous", width=105, css_classes=["theme-btn"]
+            label="◀ Previous", width=105, css_classes=["theme-btn"], align="center"
         )
         self.next_button = Button(
-            label="Next ▶", width=105, css_classes=["theme-btn"]
+            label="Next ▶", width=105, css_classes=["theme-btn"], align="center"
         )
         self.home_button = Button(
-            label="🏠 Home", width=100, css_classes=["theme-btn"]
+            label="🏠 Home", width=100, css_classes=["theme-btn"], align="center"
         )
 
         self.play_button = Button(
-            label="▶ Auto Play", width=115, css_classes=["theme-btn"]
+            label="▶ Auto Play", width=115, css_classes=["theme-btn"], align="center"
         )
         self.stop_button = Button(
-            label="⏸ Stop", width=95, css_classes=["theme-btn"]
+            label="⏸ Stop", width=95, css_classes=["theme-btn"], align="center"
         )
 
         slide_options = [
@@ -205,11 +309,13 @@ class InteractivePresentation:
             options=slide_options,
             width=280,
             css_classes=["theme-select"],
+            align="center",
         )
 
         self.progress_div = Div(
             text=self.get_progress_html(),
             width=220,
+            align="center",
         )
 
         self.prev_button.on_click(self.prev_slide)
@@ -237,11 +343,11 @@ class InteractivePresentation:
         """Generate progress bar HTML matching wine theme"""
         progress_pct = ((self.current_slide + 1) / self.total_slides) * 100
         return f"""
-        <div style="font-family: 'Lusitania', Georgia, serif; text-align: center; padding: 2px 5px;">
-            <div style="font-size: 12px; font-weight: bold; color: #AF1B3F; letter-spacing: 0.5px; margin-bottom: 4px;">
+        <div style="font-family: 'Lusitana', Georgia, serif; text-align: center; padding: 2px 5px; margin: 0 auto;">
+            <div style="font-size: 12px; font-weight: bold; color: #AF1B3F; letter-spacing: 0.5px; margin-bottom: 4px; text-align: center;">
                 SLIDE {self.current_slide + 1} OF {self.total_slides}
             </div>
-            <div style="width: 100%; background-color: #FFFFFF; border: 1px solid #E2D7C3; height: 12px; border-radius: 6px; padding: 1px; box-sizing: border-box;">
+            <div style="width: 100%; background-color: #FFFFFF; border: 1px solid #E2D7C3; height: 12px; border-radius: 6px; padding: 1px; box-sizing: border-box; margin: 0 auto;">
                 <div style="width: {progress_pct}%; background-color: #AF1B3F; height: 100%; border-radius: 4px; transition: width 0.3s ease-in-out;"></div>
             </div>
         </div>
@@ -264,39 +370,41 @@ class InteractivePresentation:
         """Slide 1: Title Card"""
         title_banner = Div(
             text="""
-        <div style="position: relative; text-align: center; background-color: #FFFFFF; border: 1px solid #E2D7C3; border-left: 6px solid #AF1B3F; padding: 100px 40px; border-radius: 12px; margin-top: 40px; overflow: hidden; box-shadow: 0 4px 15px rgba(175, 27, 63, 0.05);">
+        <div style="position: relative; text-align: center; background-color: #FFFFFF; border: 1px solid #E2D7C3; border-left: 6px solid #AF1B3F; padding: 100px 40px; border-radius: 12px; margin: 40px auto 0 auto; overflow: hidden; box-shadow: 0 4px 15px rgba(175, 27, 63, 0.05); max-width: 1100px;">
         
             <div style="position: absolute; top: -40px; right: -40px; width: 180px; height: 180px; border-radius: 50%; border: 12px solid rgba(175, 27, 63, 0.08); box-shadow: inset 0 0 15px rgba(175, 27, 63, 0.05); pointer-events: none;"></div>
             <div style="position: absolute; top: -20px; right: -20px; width: 120px; height: 120px; border-radius: 50%; border: 6px solid rgba(255, 188, 66, 0.25); pointer-events: none;"></div>
         
             <div style="position: absolute; bottom: -50px; left: -30px; width: 160px; height: 160px; border-radius: 50%; border: 10px solid rgba(33, 131, 128, 0.1); transform: rotate(-15deg); pointer-events: none;"></div>
 
-            <h1 style="position: relative; z-index: 1; font-size: 48px; color: #AF1B3F; font-family: 'Lusitania', serif; margin: 0 0 20px 0; font-weight: 700; line-height: 1.2;">
+            <h1 style="position: relative; z-index: 1; font-size: 48px; color: #AF1B3F; font-family: 'Lusitana', serif; margin: 0 0 20px 0; font-weight: 700; line-height: 1.2; text-align: center;">
                 Wine: should you splash out on the bottle?
             </h1>
-            <p style="position: relative; z-index: 1; font-size: 22px; color: #5C4A42; font-style: italic; margin: 0; font-weight: 400;">
+            <p style="position: relative; z-index: 1; font-size: 22px; color: #5C4A42; font-style: italic; margin: 0; font-weight: 400; text-align: center;">
                 Visualizing relationship between price, ratings and wine features
             </p>
         </div>
         """,
-            width=1200,
-            height=320,
+            sizing_mode="stretch_width",
+            height=340,
+            align="center",
         )
 
-        return layout([[title_banner]])
+        return self.stack([[title_banner]])
 
     def create_slide_1_price_vs_rating(self):
         """Slide 1: Scatter plot of price vs rating with Cubic Gamma GLM Fit (Log Link)"""
         title = Div(
             text="""
-             <h2 style="text-align: center; color: #AF1B3F; font-family: 'Lusitania', serif; margin-bottom: 5px;">
+             <h2 style="text-align: center; color: #AF1B3F; font-family: 'Lusitana', serif; margin-bottom: 5px;">
                 Average Rating vs. Price
             </h2>
             <p style="text-align: center; color: #5C4A42; font-size: 14px; margin-top: 0; margin-bottom: 15px;">
                     Select a wine category below to inspect rating and price distribution alongside a Cubic Gamma Regression fit (Log Link).
             </p>
             """,
-            width=1200,
+            sizing_mode="stretch_width",
+            align="center",
         )
 
         rng = np.random.default_rng(123)
@@ -354,11 +462,13 @@ class InteractivePresentation:
             x_axis_label="Average Rating",
             y_axis_label="Price ($)",
             tools="pan,wheel_zoom,reset,hover,save",
+            align="center",
         )
+        p.title.align = "center"
 
         p.background_fill_color = "#FFFFFF"
         p.background_fill_alpha = 1.0
-        p.border_fill_color = "#F7F5F0"
+        p.border_fill_color = "#FDFCF7"
         p.grid.grid_line_color = "#EAE5DC"
         p.grid.grid_line_alpha = 0.8
 
@@ -388,15 +498,15 @@ class InteractivePresentation:
         hover.renderers = [scatter]
 
         compact_tooltip_html = """
-        <div style="max-width: 190px; max-height: 110px; overflow: hidden; font-size: 11px; padding: 6px 8px; border-radius: 4px; background: #FFFFFF; border: 1.5px solid #AF1B3F; box-shadow: 0 2px 6px rgba(0,0,0,0.1); line-height: 1.4;">
-            <div style="font-weight: bold; color: #AF1B3F; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border-bottom: 1px solid #E2D7C3; padding-bottom: 2px; margin-bottom: 4px;">
+        <div style="max-width: 190px; max-height: 110px; overflow: hidden; font-size: 11px; padding: 6px 8px; border-radius: 4px; background: #FFFFFF; border: 1.5px solid #AF1B3F; box-shadow: 0 2px 6px rgba(0,0,0,0.1); line-height: 1.4; text-align: center; font-family: 'Lusitana', Georgia, serif;">
+            <div style="font-weight: bold; color: #AF1B3F; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border-bottom: 1px solid #E2D7C3; padding-bottom: 2px; margin-bottom: 4px; text-align: center;">
                 @Label
             </div>
-            <div style="color: #5C4A42; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+            <div style="color: #5C4A42; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: center;">
                 @Country &bull; @Region
             </div>
-            <div style="color: #5C4A42;"><b>Vintage:</b> @Vintage</div>
-            <div style="margin-top: 3px; border-top: 1px dashed #E2D7C3; padding-top: 3px;">
+            <div style="color: #5C4A42; text-align: center;"><b>Vintage:</b> @Vintage</div>
+            <div style="margin-top: 3px; border-top: 1px dashed #E2D7C3; padding-top: 3px; text-align: center;">
                 <b style="color: #AF1B3F;">@Rating pts</b> | <b style="color: #218380;">$@Price{0.00}</b>
             </div>
         </div>
@@ -411,6 +521,7 @@ class InteractivePresentation:
             active=0,
             inline=True,
             width=400,
+            align="center",
         )
 
         def update_plot(attr, old, new):
@@ -425,33 +536,31 @@ class InteractivePresentation:
             scatter.glyph.line_color = wine_colors[selected_kind]
 
         toggle.on_change("active", update_plot)
-        toggle_container = row(toggle, align="center")
 
-        return layout([[title], [toggle_container], [p]])
+        return self.stack([[title], [toggle], [p]])
 
     def create_slide_2_visual_vocabulary(self):
-        """Slide: Geographic Wine Analysis (Price & Rating World Maps - Vertically Stacked)"""
+        """Slide 2: Geographic Wine Analysis (Price & Rating World Maps - Vertically Stacked)"""
         title = Div(
             text="""
-        <div style="text-align: center; font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; margin-bottom: 10px;">
-            <h2 style="color: #4A0E17; font-size: 26px; margin-bottom: 4px; font-weight: 700;">
-                🌍 Geographic Wine Analysis: Price & Rating by Country
-            </h2>
-            <p style="color: #6E5B55; font-size: 15px; margin: 0;">
-                Select a wine category below to update the maps. 
-                Hover over any country to inspect detailed price and rating statistics.
-            </p>
-        </div>
+        <h2 style="text-align: center; color: #AF1B3F; font-family: 'Lusitana', serif; margin-bottom: 5px;">
+            Geographic Wine Analysis: Price & Rating by Country
+        </h2>
+        <p style="text-align: center; color: #5C4A42; font-family: 'Lusitana', Georgia, serif; font-size: 14px; margin-top: 0; margin-bottom: 15px;">
+            Select a wine category below to update the maps. Hover over any country to inspect detailed price and rating statistics.
+        </p>
         """,
-            width=1200,
+            sizing_mode="stretch_width",
+            align="center",
         )
 
         if WORLD_GEO is None or WORLD_GEO.empty:
             error_div = Div(
-                text="<p style='color: #4A0E17; text-align: center;'>Unable to load world country geometries.</p>",
-                width=1200
+                text="<p style='color: #AF1B3F; text-align: center; font-family: \"Lusitana\", serif;'>Unable to load world country geometries.</p>",
+                sizing_mode="stretch_width",
+                align="center",
             )
-            return layout([[title], [error_div]])
+            return self.stack([[title], [error_div]])
 
         options = ["Global", "Red", "White", "Rose", "Sparkling"]
 
@@ -526,10 +635,11 @@ class InteractivePresentation:
             y_range=y_bounds,
             match_aspect=True,
             aspect_ratio=map_aspect,
+            align="center",
         )
-        
-        p_price.background_fill_color = "#FAFAFA"
-        p_price.border_fill_color = "#FFFFFF"
+        p_price.title.align = "center"
+        p_price.background_fill_color = "#FFFFFF"
+        p_price.border_fill_color = "#FDFCF7"
         p_price.grid.grid_line_color = None
 
         price_patches = p_price.patches(
@@ -555,9 +665,9 @@ class InteractivePresentation:
 
         price_hover = HoverTool(
             tooltips="""
-            <div style="font-family: sans-serif; padding: 6px 10px; font-size: 12px; background: #FFFFFF; border: 1px solid #CBD5E1; border-radius: 6px; box-shadow: 0 2px 6px rgba(0,0,0,0.1);">
-                <strong style="color: #78350F; font-size: 13px;">📍 @name</strong><br/>
-                <div style="margin-top: 4px; line-height: 1.4;">
+            <div style="font-family: 'Lusitana', Georgia, serif; padding: 6px 10px; font-size: 12px; background: #FFFFFF; border: 1.5px solid #AF1B3F; border-radius: 6px; box-shadow: 0 2px 6px rgba(0,0,0,0.1); text-align: center;">
+                <strong style="color: #AF1B3F; font-size: 13px; text-align: center;">📍 @name</strong><br/>
+                <div style="margin-top: 4px; line-height: 1.4; color: #5C4A42; text-align: center;">
                     <b>Mean Price:</b> $@Price_Mean<br/>
                     <b>Median Price:</b> $@Price_Median<br/>
                     <b>Min:</b> $@Price_Min | <b>Max:</b> $@Price_Max<br/>
@@ -582,9 +692,11 @@ class InteractivePresentation:
             y_range=p_price.y_range,
             match_aspect=True,
             aspect_ratio=map_aspect,
+            align="center",
         )
-        p_rating.background_fill_color = "#FAFAFA"
-        p_rating.border_fill_color = "#FFFFFF"
+        p_rating.title.align = "center"
+        p_rating.background_fill_color = "#FFFFFF"
+        p_rating.border_fill_color = "#FDFCF7"
         p_rating.grid.grid_line_color = None
 
         rating_patches = p_rating.patches(
@@ -610,9 +722,9 @@ class InteractivePresentation:
 
         rating_hover = HoverTool(
             tooltips="""
-            <div style="font-family: sans-serif; padding: 6px 10px; font-size: 12px; background: #FFFFFF; border: 1px solid #CBD5E1; border-radius: 6px; box-shadow: 0 2px 6px rgba(0,0,0,0.1);">
-                <strong style="color: #1E3A8A; font-size: 13px;">📍 @name</strong><br/>
-                <div style="margin-top: 4px; line-height: 1.4;">
+            <div style="font-family: 'Lusitana', Georgia, serif; padding: 6px 10px; font-size: 12px; background: #FFFFFF; border: 1.5px solid #AF1B3F; border-radius: 6px; box-shadow: 0 2px 6px rgba(0,0,0,0.1); text-align: center;">
+                <strong style="color: #AF1B3F; font-size: 13px; text-align: center;">📍 @name</strong><br/>
+                <div style="margin-top: 4px; line-height: 1.4; color: #5C4A42; text-align: center;">
                     <b>Mean Rating:</b> @Rating_Mean ⭐<br/>
                     <b>Median Rating:</b> @Rating_Median ⭐<br/>
                     <b>Min:</b> @Rating_Min ⭐ | <b>Max:</b> @Rating_Max ⭐<br/>
@@ -631,6 +743,9 @@ class InteractivePresentation:
             value="Global",
             options=options,
             width=260,
+            css_classes=["theme-select"],
+            align="center",
+            margin=(0, 0, 15, 0),
         )
 
         def update_maps(attr, old, new):
@@ -643,23 +758,23 @@ class InteractivePresentation:
 
         select_wine.on_change("value", update_maps)
 
-        controls_row = row(select_wine, align="center", margin=(0, 0, 15, 0))
 
-        return layout([
+        return self.stack([
             [title],
-            [controls_row],
+            [select_wine],
             [p_price],
-            [p_rating]
+            [p_rating],
         ])
 
     def create_slide_3_overview(self):
         """Slide 3: Data Overview Dashboard"""
         title = Div(
             text="""
-        <h2 style="text-align: center; color: #AF1B3F; font-family: 'Lusitania', serif;">📈 Data Overview Dashboard</h2>
+        <h2 style="text-align: center; color: #AF1B3F; font-family: 'Lusitana', serif;">📈 Data Overview Dashboard</h2>
         <p style="text-align: center; color: #5C4A42;">Multiple synchronized visualizations showing different aspects of the dataset</p>
         """,
-            width=1200,
+            sizing_mode="stretch_width",
+            align="center",
         )
 
         categories = ["Product A", "Product B", "Product C", "Product D", "Product E"]
@@ -678,11 +793,13 @@ class InteractivePresentation:
 
         p1 = figure(
             x_range=categories,
-            width=580,
+            width=570,
             height=300,
             title="Sales by Product",
             toolbar_location="above",
+            align="center",
         )
+        p1.title.align = "center"
         p1.vbar(
             x="categories",
             top="values",
@@ -696,7 +813,8 @@ class InteractivePresentation:
         )
         p1.y_range.start = 0
 
-        p2 = figure(width=580, height=300, title="Trend Analysis")
+        p2 = figure(width=570, height=300, title="Trend Analysis", align="center")
+        p2.title.align = "center"
         p2.line("x", "y", source=line_source, line_width=2, color="#AF1B3F")
         p2.scatter("x", "y", source=line_source, size=5, color="#AF1B3F", alpha=0.6)
 
@@ -718,11 +836,13 @@ class InteractivePresentation:
         p3 = figure(
             x_range=months,
             y_range=days,
-            width=580,
+            width=570,
             height=300,
             title="Activity Heatmap",
             toolbar_location="above",
+            align="center",
         )
+        p3.title.align = "center"
 
         mapper = LinearColorMapper(palette=RdYlBu11[::-1], low=0, high=100)
         p3.rect(
@@ -739,34 +859,37 @@ class InteractivePresentation:
 
         stats = Div(
             text=f"""
-        <div style="background-color: #FFFFFF; border: 1px solid #E2D7C3; padding: 20px; border-radius: 8px; color: #211B18; height: 255px; box-sizing: border-box;">
-            <h3 style="color: #AF1B3F; margin-top: 0;">📊 Key Metrics:</h3>
-            <table style="width: 100%; font-size: 14px; border-collapse: collapse;">
-                <tr style="border-bottom: 1px solid #E2D7C3;"><td style="padding: 8px 0;"><b>Total Products:</b></td><td>{len(categories)}</td></tr>
-                <tr style="border-bottom: 1px solid #E2D7C3;"><td style="padding: 8px 0;"><b>Average Sales:</b></td><td>${bar_data["values"].mean():.2f}</td></tr>
-                <tr><td style="padding: 8px 0;"><b>Max Sales:</b></td><td>${bar_data["values"].max()}</td></tr>
+        <div style="background-color: #FFFFFF; border: 1px solid #E2D7C3; padding: 20px; border-radius: 8px; color: #211B18; height: 255px; box-sizing: border-box; text-align: center; margin: 0 auto;">
+            <h3 style="color: #AF1B3F; margin-top: 0; text-align: center;">📊 Key Metrics:</h3>
+            <table style="width: 100%; font-size: 14px; border-collapse: collapse; text-align: center; margin: 0 auto;">
+                <tr style="border-bottom: 1px solid #E2D7C3;"><td style="padding: 8px 0; text-align: center;"><b>Total Products:</b> {len(categories)}</td></tr>
+                <tr style="border-bottom: 1px solid #E2D7C3;"><td style="padding: 8px 0; text-align: center;"><b>Average Sales:</b> ${bar_data["values"].mean():.2f}</td></tr>
+                <tr><td style="padding: 8px 0; text-align: center;"><b>Max Sales:</b> ${bar_data["values"].max()}</td></tr>
             </table>
         </div>
         """,
-            width=580,
+            width=570,
             height=300,
+            align="center",
         )
 
-        return layout([[title], [p1, p2], [p3, stats]])
+        return self.stack([[title], [p1, p2], [p3, stats]])
 
     def create_slide_4_interactive(self):
         """Slide 4: Interactive Analysis with Controls"""
         title = Div(
             text="""
-        <h2 style="text-align: center; color: #AF1B3F; font-family: 'Lusitania', serif;">🎮 Interactive Data Explorer</h2>
+        <h2 style="text-align: center; color: #AF1B3F; font-family: 'Lusitana', serif;">🎮 Interactive Data Explorer</h2>
         <p style="text-align: center; color: #5C4A42;">Adjust parameters to explore different data visualizations</p>
         """,
-            width=1200,
+            sizing_mode="stretch_width",
+            align="center",
         )
 
         self.slide4_source = ColumnDataSource(data=dict(x=[], y=[]))
 
-        p = figure(width=800, height=450, title="Interactive Function Plotter")
+        p = figure(width=780, height=450, title="Interactive Function Plotter", align="center")
+        p.title.align = "center"
         self.slide4_line = p.line(
             "x", "y", source=self.slide4_source, line_width=2, color="#AF1B3F"
         )
@@ -777,15 +900,16 @@ class InteractivePresentation:
             options=["sin", "cos", "exp", "log", "polynomial"],
             css_classes=["theme-select"],
             width=360,
+            align="center",
         )
         self.param_slider = Slider(
-            start=0.1, end=5, value=1, step=0.1, title="Parameter", width=360
+            start=0.1, end=5, value=1, step=0.1, title="Parameter", width=360, align="center"
         )
         self.points_slider = Slider(
-            start=50, end=500, value=100, step=50, title="Number of Points", width=360
+            start=50, end=500, value=100, step=50, title="Number of Points", width=360, align="center"
         )
         self.noise_slider = Slider(
-            start=0, end=1, value=0, step=0.05, title="Noise Level", width=360
+            start=0, end=1, value=0, step=0.05, title="Noise Level", width=360, align="center"
         )
 
         def update_slide4():
@@ -821,9 +945,9 @@ class InteractivePresentation:
 
         info = Div(
             text="""
-        <div style="background-color: #FFFFFF; border: 1px solid #E2D7C3; padding: 15px; border-radius: 8px; color: #211B18;">
-            <h3 style="color: #AF1B3F; margin-top: 0;">🎯 Try These:</h3>
-            <ul style="font-size: 13px; margin-bottom: 0;">
+        <div style="background-color: #FFFFFF; border: 1px solid #E2D7C3; padding: 15px; border-radius: 8px; color: #211B18; text-align: center; margin: 0 auto;">
+            <h3 style="color: #AF1B3F; margin-top: 0; text-align: center;">🎯 Try These:</h3>
+            <ul style="font-size: 13px; margin-bottom: 0; text-align: center; list-style-position: inside; padding-left: 0;">
                 <li>Change function type</li>
                 <li>Adjust parameter to modify shape</li>
                 <li>Add noise for realistic data</li>
@@ -832,6 +956,7 @@ class InteractivePresentation:
         """,
             width=360,
             height=150,
+            align="center",
         )
 
         controls = column(
@@ -840,18 +965,20 @@ class InteractivePresentation:
             self.points_slider,
             self.noise_slider,
             info,
+            align="center",
         )
 
-        return layout([[title], [p, controls]])
+        return self.stack([[title], [p, controls]])
 
     def create_slide_5_timeseries(self):
         """Slide 5: Time Series Analysis"""
         title = Div(
             text="""
-        <h2 style="text-align: center; color: #AF1B3F; font-family: 'Lusitania', serif;">📅 Time Series Analysis</h2>
+        <h2 style="text-align: center; color: #AF1B3F; font-family: 'Lusitana', serif;">📅 Time Series Analysis</h2>
         <p style="text-align: center; color: #5C4A42;">Exploring temporal patterns and trends</p>
         """,
-            width=1200,
+            sizing_mode="stretch_width",
+            align="center",
         )
 
         dates = pd.date_range("2023-01-01", periods=365, freq="D")
@@ -872,7 +999,9 @@ class InteractivePresentation:
             height=420,
             x_axis_type="datetime",
             title="Time Series with Moving Averages",
+            align="center",
         )
+        p.title.align = "center"
 
         p.line("dates", "values", source=source, line_width=1, color="#C8C2BC", alpha=0.7, legend_label="Daily")
         p.line("dates", "ma7", source=source, line_width=2, color="#218380", legend_label="7-day MA")
@@ -897,27 +1026,29 @@ class InteractivePresentation:
 
         stats = Div(
             text=f"""
-        <div style="background-color: #FFFFFF; border: 1px solid #E2D7C3; padding: 15px 20px; border-radius: 8px; color: #211B18;">
-            <h3 style="color: #AF1B3F; margin-top: 0;">📈 Time Series Statistics:</h3>
-            <table style="width: 100%; font-size: 14px;">
-                <tr><td><b>Period:</b> {dates[0].strftime("%Y-%m-%d")} to {dates[-1].strftime("%Y-%m-%d")}</td><td><b>Mean:</b> {np.mean(values):.2f}</td></tr>
+        <div style="background-color: #FFFFFF; border: 1px solid #E2D7C3; padding: 15px 20px; border-radius: 8px; color: #211B18; text-align: center; margin: 0 auto;">
+            <h3 style="color: #AF1B3F; margin-top: 0; text-align: center;">📈 Time Series Statistics:</h3>
+            <table style="width: 100%; font-size: 14px; text-align: center; margin: 0 auto;">
+                <tr><td style="text-align: center;"><b>Period:</b> {dates[0].strftime("%Y-%m-%d")} to {dates[-1].strftime("%Y-%m-%d")} &nbsp;|&nbsp; <b>Mean Value:</b> {np.mean(values):.2f}</td></tr>
             </table>
         </div>
         """,
             width=1160,
             height=100,
+            align="center",
         )
 
-        return layout([[title], [p], [stats]])
+        return self.stack([[title], [p], [stats]])
 
     def create_slide_6_correlation(self):
         """Slide 6: Correlation Matrix Explorer"""
         title = Div(
             text="""
-        <h2 style="text-align: center; color: #AF1B3F; font-family: 'Lusitania', serif;">🔗 Correlation Analysis</h2>
+        <h2 style="text-align: center; color: #AF1B3F; font-family: 'Lusitana', serif;">🔗 Correlation Analysis</h2>
         <p style="text-align: center; color: #5C4A42;">Exploring relationships between variables</p>
         """,
-            width=1200,
+            sizing_mode="stretch_width",
+            align="center",
         )
 
         n_vars = 8
@@ -952,7 +1083,9 @@ class InteractivePresentation:
             title="Correlation Matrix",
             toolbar_location="above",
             tools="hover,save",
+            align="center",
         )
+        p.title.align = "center"
 
         mapper = LinearColorMapper(palette=RdYlBu11[::-1], low=-1, high=1)
 
@@ -982,34 +1115,36 @@ class InteractivePresentation:
 
         guide = Div(
             text="""
-        <div style="background-color: #FFFFFF; border: 1px solid #E2D7C3; padding: 20px; border-radius: 8px; color: #211B18; height: 220px;">
-            <h3 style="color: #AF1B3F; margin-top: 0;">📊 Interpretation Guide:</h3>
-            <p style="font-size: 14px; line-height: 1.5;">Hover over individual cells to inspect precise correlation coefficients between dataset variables.</p>
+        <div style="background-color: #FFFFFF; border: 1px solid #E2D7C3; padding: 20px; border-radius: 8px; color: #211B18; height: 220px; text-align: center; margin: 0 auto;">
+            <h3 style="color: #AF1B3F; margin-top: 0; text-align: center;">📊 Interpretation Guide:</h3>
+            <p style="font-size: 14px; line-height: 1.5; text-align: center;">Hover over individual cells to inspect precise correlation coefficients between dataset variables.</p>
         </div>
         """,
             width=440,
             height=260,
+            align="center",
         )
 
-        return layout([[title], [p, guide]])
+        return self.stack([[title], [p, guide]])
 
     def create_slide_7_conclusions(self):
         """Slide 7: Conclusions and Summary"""
         title = Div(
             text="""
-        <h1 style="text-align: center; color: #AF1B3F; font-family: 'Lusitania', serif;">
+        <h1 style="text-align: center; color: #AF1B3F; font-family: 'Lusitana', serif;">
             🎯 Conclusions & Key Takeaways
         </h1>
         """,
-            width=1200,
+            sizing_mode="stretch_width",
             height=80,
+            align="center",
         )
 
         card1 = Div(
             text="""
-        <div style="background-color: #FFFFFF; border: 1px solid #E2D7C3; padding: 20px; border-radius: 8px; color: #211B18; height: 180px;">
-            <h3 style="color: #AF1B3F; margin-top: 0;">✅ What We've Demonstrated</h3>
-            <ul style="font-size: 14px; line-height: 1.5;">
+        <div style="background-color: #FFFFFF; border: 1px solid #E2D7C3; padding: 20px; border-radius: 8px; color: #211B18; height: 180px; text-align: center; margin: 0 auto;">
+            <h3 style="color: #AF1B3F; margin-top: 0; text-align: center;">✅ What We've Demonstrated</h3>
+            <ul style="font-size: 14px; line-height: 1.5; text-align: center; list-style-position: inside; padding-left: 0;">
                 <li>Interactive visualizations with real-time updates</li>
                 <li>Multiple chart types and responsive layouts</li>
                 <li>Custom theme synchronization</li>
@@ -1018,13 +1153,14 @@ class InteractivePresentation:
         """,
             width=560,
             height=220,
+            align="center",
         )
 
         card2 = Div(
             text="""
-        <div style="background-color: #FFFFFF; border: 1px solid #E2D7C3; padding: 20px; border-radius: 8px; color: #211B18; height: 180px;">
-            <h3 style="color: #AF1B3F; margin-top: 0;">🚀 Bokeh Advantages</h3>
-            <ul style="font-size: 14px; line-height: 1.5;">
+        <div style="background-color: #FFFFFF; border: 1px solid #E2D7C3; padding: 20px; border-radius: 8px; color: #211B18; height: 180px; text-align: center; margin: 0 auto;">
+            <h3 style="color: #AF1B3F; margin-top: 0; text-align: center;">🚀 Bokeh Advantages</h3>
+            <ul style="font-size: 14px; line-height: 1.5; text-align: center; list-style-position: inside; padding-left: 0;">
                 <li>Python callbacks for complex logic</li>
                 <li>Real-time data streaming</li>
                 <li>Server-side computation</li>
@@ -1033,23 +1169,25 @@ class InteractivePresentation:
         """,
             width=560,
             height=220,
+            align="center",
         )
 
         thanks = Div(
             text="""
-        <div style="text-align: center; margin-top: 20px; font-family: 'Lusitania', serif;">
-            <h2 style="color: #AF1B3F;">Thank You! 🙏</h2>
-            <p style="font-size: 16px; color: #5C4A42;">
+        <div style="text-align: center; margin: 20px auto 0 auto; font-family: 'Lusitana', serif;">
+            <h2 style="color: #AF1B3F; text-align: center;">Thank You! 🙏</h2>
+            <p style="font-size: 16px; color: #5C4A42; text-align: center;">
                 This presentation was built entirely with Bokeh Server<br>
                 All visualizations are live and interactive
             </p>
         </div>
         """,
-            width=1200,
+            sizing_mode="stretch_width",
             height=120,
+            align="center",
         )
 
-        return layout([[title], [card1, card2], [thanks]])
+        return self.stack([[title], [card1, card2], [thanks]])
 
     def update_slide(self):
         """Update current slide display and UI elements"""
@@ -1094,7 +1232,7 @@ class InteractivePresentation:
         if self.auto_play:
             self.auto_play = False
             if self.auto_play_callback:
-                curdoc().remove_periodic_callback(self.auto_play_callback)
+                curdoc().remove_periodic_callback(self.auto_advance)
             self.play_button.label = "▶ Auto Play"
             self.play_button.css_classes = ["theme-btn"]
 
@@ -1105,8 +1243,8 @@ class InteractivePresentation:
         """Assemble main presentation layout centered horizontally"""
 
         separator = Div(
-            text="<hr style='border: 0; height: 1.5px; background-color: #E2D7C3; margin: 12px 0 20px 0;'>",
-            width=1200,
+            text="<hr style='border: 0; height: 1.5px; background-color: #E2D7C3; margin: 12px auto 20px auto;'>",
+            sizing_mode="stretch_width",
             height=15,
         )
 
@@ -1119,15 +1257,25 @@ class InteractivePresentation:
             self.play_button,
             self.stop_button,
             self.progress_div,
+            width=SLIDE_WIDTH,
+            styles={"justify-content": "center"},
         )
 
-        self.main_content = column(self.slides[0])
+        self.main_content = column(self.slides[0], width=SLIDE_WIDTH)
 
+        # Root: fixed width, centered on the page with auto side margins.
         self.layout = column(
             nav_bar,
             separator,
             self.main_content,
+            width=SLIDE_WIDTH,
+            styles={"margin-left": "auto", "margin-right": "auto", "max-width": "100%"},
         )
+
+        # Center every element of the layout and of every slide.
+        center_everything(self.layout, is_root=True)
+        for slide in self.slides:
+            center_everything(slide)
 
         self.update_slide()
 
