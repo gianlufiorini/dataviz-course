@@ -2,9 +2,15 @@
 import base64
 import json
 import os
+from io import BytesIO
 import geopandas as gpd
+import matplotlib
+
+matplotlib.use("Agg")  # off-screen rendering (no GUI) for the tooltip scatterplots
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import statsmodels.api as sm
 
 from bokeh.plotting import figure, curdoc
 from bokeh.models import (
@@ -14,6 +20,7 @@ from bokeh.models import (
     Slider,
     Select,
     ColumnDataSource,
+    FixedTicker,
     HoverTool,
     Range1d,
     LinearColorMapper,
@@ -25,9 +32,10 @@ from bokeh.models import (
     LayoutDOM,
     Widget,
     InlineStyleSheet,
+    Title,
 )
 from bokeh.layouts import column, row
-from bokeh.palettes import RdYlBu11, YlOrRd9
+from bokeh.palettes import Cividis256, PuOr11, RdYlBu11
 from bokeh.transform import factor_cmap
 from bokeh.themes import Theme
 
@@ -73,17 +81,7 @@ def _merge_styles(model, extra):
 
 
 def center_everything(root, is_root=False):
-    """Centers every layout element horizontally, and all text inside Divs.
-
-    Three independent mechanisms are used, all pushing the same direction so they
-    can never fight each other:
-      * Columns get  align-items: center   (children centered horizontally)
-      * Rows get     justify-content: center (children centered horizontally)
-      * Every child gets align="center" (Bokeh's own align-self centering)
-      * Divs get text-align: center (inherited by the text inside the shadow DOM)
-    Full-width Divs get an explicit width instead of stretch_width, because a
-    stretched Div combined with align="center" shrinks to its content.
-    """
+    """Centers every layout element horizontally, and all text inside Divs."""
     from bokeh.models import Column, Row
 
     for model in root.references():
@@ -134,6 +132,7 @@ class InteractivePresentation:
         self.slides = []
         self.auto_play = False
         self.auto_play_callback = None
+        self._is_updating = False
 
         self.create_slides()
         self.create_navigation()
@@ -389,14 +388,14 @@ class InteractivePresentation:
         return self.stack([[title_banner]])
 
     def create_slide_1_price_vs_rating(self):
-        """Slide 1: Scatter plot of price vs rating with an identity reference line"""
+        """Slide 1: Scatter plot of price vs rating with a robust linear regression fit (Huber, on log price)"""
         title = Div(
             text="""
              <h2 style="text-align: center; color: #AF1B3F; font-family: 'Lusitana', serif; margin-bottom: 5px;">
                 Average Rating vs. Price
             </h2>
             <p style="text-align: center; color: #5C4A42; font-size: 14px; margin-top: 0; margin-bottom: 15px;">
-                    Select a wine category below to inspect rating and price distribution alongside an identity reference line (the diagonal of the plot).
+                    Select a wine category below to inspect rating and price distribution alongside a robust linear regression fit (Huber loss, fitted on log price).
             </p>
             """,
             sizing_mode="stretch_width",
@@ -420,9 +419,30 @@ class InteractivePresentation:
         initial_df = df[df["Kind"] == initial_kind]
         source = ColumnDataSource(data=ColumnDataSource.from_df(initial_df))
 
-        # Identity line: the plot's own diagonal (bottom-left to top-right corner).
-        # Endpoints are filled in once the fixed axis ranges are set below.
-        identity_source = ColumnDataSource(data=dict(x=[], y=[]))
+        def compute_robust_fit(sub_df, grid_points=100):
+            valid = sub_df.dropna(subset=["Rating_jittered", "Price"])
+            valid = valid[valid["Price"] > 0]
+
+            if len(valid) < 3:
+                return dict(x_fit=[], y_fit=[])
+
+            log_price = np.log10(valid["Price"].values)
+            rating = valid["Rating_jittered"].values
+
+            try:
+                model = sm.RLM(
+                    rating,
+                    sm.add_constant(log_price),
+                    M=sm.robust.norms.HuberT(),
+                ).fit()
+
+                grid = np.linspace(log_price.min(), log_price.max(), grid_points)
+                y_fit = model.predict(sm.add_constant(grid))
+                return dict(x_fit=10**grid, y_fit=y_fit)
+            except Exception:
+                return dict(x_fit=[], y_fit=[])
+
+        fit_source = ColumnDataSource(data=compute_robust_fit(initial_df))
 
         p = figure(
             width=1150,
@@ -435,7 +455,7 @@ class InteractivePresentation:
             align="center",
         )
 
-        p.title.align = "center"
+        p.title.align = "left"
 
         p.background_fill_color = "#FFFFFF"
         p.background_fill_alpha = 1.0
@@ -454,37 +474,24 @@ class InteractivePresentation:
             line_width=0.5
         )
 
-        identity_line = p.line(
-            x="x",
-            y="y",
-            source=identity_source,
+        fit_line = p.line(
+            x="x_fit",
+            y="y_fit",
+            source=fit_source,
             color="#000000",
-            alpha=0.35,
-            line_width=1,
-            line_dash=[6, 4],
-            legend_label="Identity line"
+            line_width=2.5,
+            legend_label="Robust linear fit (Huber)"
         )
 
-        # Fixed axes: the same ranges for every wine category, taken from the
-        # whole dataset so they never change when the toggle is used.
-        # x (log price): pad multiplicatively so the padding is even on screen.
         x_min = df.loc[df["Price"] > 0, "Price"].min()
         x_max = df["Price"].max()
         x_pad = (x_max / x_min) ** 0.03
         p.x_range = Range1d(x_min / x_pad, x_max * x_pad)
 
-        # y (rating): linear padding.
         y_min = df["Rating_jittered"].min()
         y_max = df["Rating_jittered"].max()
         y_pad = 0.05 * (y_max - y_min)
         p.y_range = Range1d(y_min - y_pad, y_max + y_pad)
-
-        # Diagonal from corner to corner of the fixed plot area. A line between
-        # two points is straight on screen even with the log x-axis.
-        identity_source.data = dict(
-            x=[p.x_range.start, p.x_range.end],
-            y=[p.y_range.start, p.y_range.end],
-        )
 
         p.legend.location = "top_left"
         p.legend.background_fill_alpha = 0.85
@@ -527,6 +534,7 @@ class InteractivePresentation:
 
             new_df = df[df["Kind"] == selected_kind]
             source.data = ColumnDataSource.from_df(new_df)
+            fit_source.data = compute_robust_fit(new_df)
 
             scatter.glyph.fill_color = wine_colors[selected_kind]
             scatter.glyph.line_color = wine_colors[selected_kind]
@@ -603,7 +611,7 @@ class InteractivePresentation:
 
         p_means = self.df.groupby("Country")["Price"].mean()
         price_mapper = LinearColorMapper(
-            palette=YlOrRd9[::-1],
+            palette=Cividis256,
             low=float(p_means.min()) if not p_means.empty else 0.0,
             high=float(p_means.max()) if not p_means.empty else 100.0,
             nan_color="#EBEBEB"
@@ -614,7 +622,7 @@ class InteractivePresentation:
         r_max = float(r_means.max()) if not r_means.empty else 5.0
 
         rating_mapper = LinearColorMapper(
-            palette=RdYlBu11[::-1],
+            palette=PuOr11,
             low=r_min,
             high=r_max,
             nan_color="#EBEBEB"
@@ -633,7 +641,7 @@ class InteractivePresentation:
             aspect_ratio=map_aspect,
             align="center",
         )
-        p_price.title.align = "center"
+        p_price.title.align = "left"
         p_price.background_fill_color = "#FFFFFF"
         p_price.border_fill_color = "#FDFCF7"
         p_price.grid.grid_line_color = None
@@ -690,7 +698,7 @@ class InteractivePresentation:
             aspect_ratio=map_aspect,
             align="center",
         )
-        p_rating.title.align = "center"
+        p_rating.title.align = "left"
         p_rating.background_fill_color = "#FFFFFF"
         p_rating.border_fill_color = "#FDFCF7"
         p_rating.grid.grid_line_color = None
@@ -735,13 +743,12 @@ class InteractivePresentation:
         p_rating.add_tools(rating_hover)
 
         def country_mean_range(column, wine_type, default):
-            """(low, high) of the per-country mean for the selected wine category."""
             df_sub = self.df if wine_type == "Global" else self.df[self.df["Kind"] == wine_type]
             means = df_sub.groupby("Country")[column].mean().dropna()
             if means.empty:
                 return default
             low, high = float(means.min()), float(means.max())
-            if low == high:  # a single country: avoid a zero-width color scale
+            if low == high:
                 high = low + 1e-6
             return low, high
 
@@ -759,7 +766,6 @@ class InteractivePresentation:
             price_source.geojson = get_price_geojson(new)
             rating_source.geojson = get_rating_geojson(new)
 
-            # Rescale both color scales (and their color bars) to the new range
             price_mapper.low, price_mapper.high = country_mean_range(
                 "Price", new, (price_mapper.low, price_mapper.high)
             )
@@ -773,7 +779,6 @@ class InteractivePresentation:
 
         select_wine.on_change("value", update_maps)
 
-
         return self.stack([
             [title],
             [select_wine],
@@ -781,114 +786,228 @@ class InteractivePresentation:
             [p_rating],
         ])
 
+    def create_correlation_matrix_plot(self):
+        """Lower-triangular correlation heatmap; hovering a cell shows scatterplot."""
+        COLOR_BLUE = "#0173B2"
+
+        colorblind_heatmap_colors = [
+            "#0173B2",
+            "#56B4E9",
+            "#94d4f7",
+            "#d1eaf8",
+            "#f7f7f7",
+            "#fbe3c3",
+            "#f8be81",
+            "#DE8F05",
+            "#b87000",
+        ]
+        color_mapper = LinearColorMapper(
+            palette=colorblind_heatmap_colors, low=-1, high=1
+        )
+
+        numeric_cols = ["Rating", "Log Price", "ABV", "Vintage"]
+        data = self.df[["Rating", "Price", "ABV", "Vintage"]].apply(pd.to_numeric, errors="coerce")
+        data.loc[data["Price"] <= 0, "Price"] = np.nan
+        data["Log Price"] = np.log10(data["Price"])
+        data = data[numeric_cols]
+        corr_df = data.corr()
+
+        lower_mask = np.tril(np.ones(corr_df.shape, dtype=bool), k=0)
+        corr_lower = corr_df.where(lower_mask)
+
+        corr_unstacked = corr_lower.stack().reset_index()
+        corr_unstacked.columns = ["feature_x", "feature_y", "value"]
+
+        labels = list(corr_df.columns)
+        n = len(labels)
+        label_to_idx = {label: i for i, label in enumerate(labels)}
+        rev_labels = list(reversed(labels))
+        rev_label_to_idx = {label: i for i, label in enumerate(rev_labels)}
+
+        corr_unstacked["x_num"] = corr_unstacked["feature_x"].map(label_to_idx) + 0.5
+        corr_unstacked["y_num"] = (
+            corr_unstacked["feature_y"].map(rev_label_to_idx) + 0.5
+        )
+
+        plots_dict = {}
+        rng = np.random.default_rng(123)
+        JITTER_SD = 0.02
+        JITTERED_VARS = ("Rating", "Vintage")
+        for _, r in corr_unstacked.iterrows():
+            c1, c2 = r["feature_x"], r["feature_y"]
+
+            fig_scatter, ax = plt.subplots(figsize=(4.5, 3.6), dpi=120)
+
+            pair = data[[c1, c2]].dropna() if c1 != c2 else data[[c1]].dropna()
+
+            x_label = c1
+            y_label = c2
+            x_data = pair[c1]
+            y_data = pair[c2]
+
+            if c1 != c2:
+                if c1 in JITTERED_VARS:
+                    x_data = x_data + rng.normal(scale=JITTER_SD, size=len(x_data))
+                if c2 in JITTERED_VARS:
+                    y_data = y_data + rng.normal(scale=JITTER_SD, size=len(y_data))
+
+            ax.scatter(
+                x_data, y_data, alpha=0.5, s=7, color=COLOR_BLUE, edgecolors="none"
+            )
+            ax.set_xlabel(x_label, fontsize=10, fontweight="bold")
+            ax.set_ylabel(y_label, fontsize=10, fontweight="bold")
+            ax.set_title(
+                f"Scatterplot: {x_label} vs {y_label}",
+                fontsize=11,
+                pad=10,
+                fontweight="bold",
+                loc="left",
+            )
+
+            ax.set_xticks(np.linspace(x_data.min(), x_data.max(), num=5))
+            ax.set_yticks(np.linspace(y_data.min(), y_data.max(), num=5))
+            ax.set_xlim(x_data.min(), x_data.max())
+            ax.set_ylim(y_data.min(), y_data.max())
+
+            ax.grid(True, which="major", linestyle="--", alpha=0.3, zorder=0)
+            ax.tick_params(labelsize=9)
+            ax.spines["top"].set_visible(False)
+            ax.spines["right"].set_visible(False)
+
+            fig_scatter.tight_layout()
+
+            buf = BytesIO()
+            fig_scatter.savefig(buf, format="png", bbox_inches="tight")
+            buf.seek(0)
+            img_b64 = base64.b64encode(buf.read()).decode("utf-8")
+            plt.close(fig_scatter)
+
+            plots_dict[f"{c1}_vs_{c2}"] = f"data:image/png;base64,{img_b64}"
+
+        corr_unstacked["value_str"] = corr_unstacked["value"].map(lambda x: f"{x:.2f}")
+        corr_unstacked["text_color"] = corr_unstacked["value"].map(
+            lambda val: "#ffffff" if abs(val) > 0.60 else "#000000"
+        )
+        corr_unstacked["img_src"] = [
+            plots_dict[f"{x}_vs_{y}"]
+            for x, y in zip(corr_unstacked["feature_x"], corr_unstacked["feature_y"])
+        ]
+        corr_source = ColumnDataSource(corr_unstacked)
+
+        p = figure(
+            x_range=(0, n),
+            y_range=(0, n),
+            x_axis_location="above",
+            width=680,
+            height=640,
+            tools="hover,save,pan,box_zoom,reset",
+            toolbar_location="right",
+            align="center",
+        )
+
+        p.xaxis.ticker = FixedTicker(ticks=[i + 0.5 for i in range(n)])
+        p.yaxis.ticker = FixedTicker(ticks=[i + 0.5 for i in range(n)])
+        p.xaxis.major_label_overrides = {i + 0.5: l for i, l in enumerate(labels)}
+        p.yaxis.major_label_overrides = {i + 0.5: l for i, l in enumerate(rev_labels)}
+
+        p.xgrid.ticker = FixedTicker(ticks=list(range(n + 1)))
+        p.ygrid.ticker = FixedTicker(ticks=list(range(n + 1)))
+        p.grid.grid_line_color = "#b0b0b0"
+        p.grid.grid_line_width = 1.5
+        p.grid.grid_line_alpha = 0.8
+
+        p.add_layout(
+            Title(
+                text="Correlation Matrix - Wine Characteristics",
+                text_font_size="14pt",
+                text_font_style="bold",
+                align="left",
+            ),
+            "above",
+        )
+        p.add_layout(
+            Title(
+                text="💡 Tip: Hover over cells to see detailed pair scatterplots.",
+                text_font_size="9pt",
+                text_font_style="italic",
+                text_color="#555555",
+                align="left",
+            ),
+            "above",
+        )
+
+        p.rect(
+            x="x_num",
+            y="y_num",
+            width=1,
+            height=1,
+            source=corr_source,
+            fill_color={"field": "value", "transform": color_mapper},
+            line_color=None,
+        )
+        p.text(
+            x="x_num",
+            y="y_num",
+            text="value_str",
+            source=corr_source,
+            text_align="center",
+            text_baseline="middle",
+            text_font_size="11pt",
+            text_font_style="bold",
+            text_color="text_color",
+        )
+
+        hover = p.select_one(HoverTool)
+        hover.tooltips = """
+            <div style="padding: 14px; background-color: #ffffff; border: 1px solid #cccccc; border-radius: 8px; text-align: center; box-shadow: 3px 4px 12px rgba(0,0,0,0.22);">
+                <div style="font-size: 15px; font-weight: bold; margin-bottom: 6px; color: #111111;">
+                    @feature_x vs @feature_y
+                </div>
+                <div style="font-size: 13px; margin-bottom: 10px; color: #444444;">
+                    Correlation Coefficient: <strong>@value_str</strong>
+                </div>
+                <div>
+                    <img src="@img_src"
+                         alt="Scatterplot showing the relationship between @feature_x and @feature_y"
+                         style="width: 360px; height: auto; border: 1px solid #dddddd; border-radius: 6px;" />
+                </div>
+            </div>
+        """
+
+        color_bar = ColorBar(
+            color_mapper=color_mapper,
+            ticker=BasicTicker(desired_num_ticks=10),
+            label_standoff=12,
+            border_line_color=None,
+            location=(0, 0),
+            title="Correlation",
+            title_text_font_style="bold",
+            title_text_font_size="9pt",
+        )
+        p.add_layout(color_bar, "right")
+
+        p.axis.axis_line_color = None
+        p.axis.major_tick_line_color = None
+        p.xaxis.major_label_orientation = 45
+        p.xaxis.major_label_text_font_style = "bold"
+        p.yaxis.major_label_text_font_style = "bold"
+
+        return p
+
     def create_slide_3_overview(self):
-        """Slide 3: Data Overview Dashboard"""
+        """Slide 3: Correlation matrix of the wine characteristics"""
         title = Div(
             text="""
-        <h2 style="text-align: center; color: #AF1B3F; font-family: 'Lusitana', serif;">📈 Data Overview Dashboard</h2>
-        <p style="text-align: center; color: #5C4A42;">Multiple synchronized visualizations showing different aspects of the dataset</p>
+        <h2 style="text-align: center; color: #AF1B3F; font-family: 'Lusitana', serif;">Correlation Matrix</h2>
+        <p style="text-align: center; color: #5C4A42;">Hover over a cell to see the scatterplot of that pair of variables</p>
         """,
             sizing_mode="stretch_width",
             align="center",
         )
 
-        categories = ["Product A", "Product B", "Product C", "Product D", "Product E"]
-        bar_data = pd.DataFrame(
-            {
-                "categories": categories,
-                "values": np.random.randint(50, 200, len(categories)),
-            }
-        )
-        bar_source = ColumnDataSource(bar_data)
+        corr_plot = self.create_correlation_matrix_plot()
 
-        line_data = pd.DataFrame(
-            {"x": range(50), "y": np.cumsum(np.random.randn(50)) + 100}
-        )
-        line_source = ColumnDataSource(line_data)
-
-        p1 = figure(
-            x_range=categories,
-            width=570,
-            height=300,
-            title="Sales by Product",
-            toolbar_location="above",
-            align="center",
-        )
-        p1.title.align = "center"
-        p1.vbar(
-            x="categories",
-            top="values",
-            width=0.8,
-            source=bar_source,
-            color=factor_cmap(
-                "categories",
-                palette=["#AF1B3F", "#FFBC42", "#C99DA3", "#218380", "#000000"],
-                factors=categories,
-            ),
-        )
-        p1.y_range.start = 0
-
-        p2 = figure(width=570, height=300, title="Trend Analysis", align="center")
-        p2.title.align = "center"
-        p2.line("x", "y", source=line_source, line_width=2, color="#AF1B3F")
-        p2.scatter("x", "y", source=line_source, size=5, color="#AF1B3F", alpha=0.6)
-
-        months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun"]
-        days = ["Mon", "Tue", "Wed", "Thu", "Fri"]
-        heatmap_data = []
-        for month in months:
-            for day in days:
-                heatmap_data.append((month, day, np.random.randint(0, 100)))
-
-        hm_source = ColumnDataSource(
-            data=dict(
-                months=[x[0] for x in heatmap_data],
-                days=[x[1] for x in heatmap_data],
-                values=[x[2] for x in heatmap_data],
-            )
-        )
-
-        p3 = figure(
-            x_range=months,
-            y_range=days,
-            width=570,
-            height=300,
-            title="Activity Heatmap",
-            toolbar_location="above",
-            align="center",
-        )
-        p3.title.align = "center"
-
-        mapper = LinearColorMapper(palette=RdYlBu11[::-1], low=0, high=100)
-        p3.rect(
-            x="months",
-            y="days",
-            width=1,
-            height=1,
-            source=hm_source,
-            fill_color={"field": "values", "transform": mapper},
-        )
-
-        color_bar = ColorBar(color_mapper=mapper, width=8, location=(0, 0))
-        p3.add_layout(color_bar, "right")
-
-        stats = Div(
-            text=f"""
-        <div style="background-color: #FFFFFF; border: 1px solid #E2D7C3; padding: 20px; border-radius: 8px; color: #211B18; height: 255px; box-sizing: border-box; text-align: center; margin: 0 auto;">
-            <h3 style="color: #AF1B3F; margin-top: 0; text-align: center;">📊 Key Metrics:</h3>
-            <table style="width: 100%; font-size: 14px; border-collapse: collapse; text-align: center; margin: 0 auto;">
-                <tr style="border-bottom: 1px solid #E2D7C3;"><td style="padding: 8px 0; text-align: center;"><b>Total Products:</b> {len(categories)}</td></tr>
-                <tr style="border-bottom: 1px solid #E2D7C3;"><td style="padding: 8px 0; text-align: center;"><b>Average Sales:</b> ${bar_data["values"].mean():.2f}</td></tr>
-                <tr><td style="padding: 8px 0; text-align: center;"><b>Max Sales:</b> ${bar_data["values"].max()}</td></tr>
-            </table>
-        </div>
-        """,
-            width=570,
-            height=300,
-            align="center",
-        )
-
-        return self.stack([[title], [p1, p2], [p3, stats]])
+        return self.stack([[title], [corr_plot]])
 
     def create_slide_4_interactive(self):
         """Slide 4: Interactive Analysis with Controls"""
@@ -904,7 +1023,7 @@ class InteractivePresentation:
         self.slide4_source = ColumnDataSource(data=dict(x=[], y=[]))
 
         p = figure(width=780, height=450, title="Interactive Function Plotter", align="center")
-        p.title.align = "center"
+        p.title.align = "left"
         self.slide4_line = p.line(
             "x", "y", source=self.slide4_source, line_width=2, color="#AF1B3F"
         )
@@ -1016,7 +1135,7 @@ class InteractivePresentation:
             title="Time Series with Moving Averages",
             align="center",
         )
-        p.title.align = "center"
+        p.title.align = "left"
 
         p.line("dates", "values", source=source, line_width=1, color="#C8C2BC", alpha=0.7, legend_label="Daily")
         p.line("dates", "ma7", source=source, line_width=2, color="#218380", legend_label="7-day MA")
@@ -1100,7 +1219,7 @@ class InteractivePresentation:
             tools="hover,save",
             align="center",
         )
-        p.title.align = "center"
+        p.title.align = "left"
 
         mapper = LinearColorMapper(palette=RdYlBu11[::-1], low=-1, high=1)
 
@@ -1206,12 +1325,16 @@ class InteractivePresentation:
 
     def update_slide(self):
         """Update current slide display and UI elements"""
-        self.prev_button.disabled = self.current_slide == 0
-        self.next_button.disabled = self.current_slide == self.total_slides - 1
+        self._is_updating = True
+        try:
+            self.prev_button.disabled = self.current_slide == 0
+            self.next_button.disabled = self.current_slide == self.total_slides - 1
 
-        self.progress_div.text = self.get_progress_html()
-        self.slide_select.value = str(self.current_slide)
-        self.main_content.children = [self.slides[self.current_slide]]
+            self.progress_div.text = self.get_progress_html()
+            self.slide_select.value = str(self.current_slide)
+            self.main_content.children = [self.slides[self.current_slide]]
+        finally:
+            self._is_updating = False
 
     def prev_slide(self):
         if self.current_slide > 0:
@@ -1231,7 +1354,15 @@ class InteractivePresentation:
         self.update_slide()
 
     def jump_to_slide(self, attr, old, new):
-        self.current_slide = int(new)
+        if getattr(self, "_is_updating", False):
+            return
+        try:
+            self.current_slide = int(new)
+        except (ValueError, TypeError):
+            for i in range(self.total_slides):
+                if str(i) == str(new) or f"Slide {i + 1}" in str(new):
+                    self.current_slide = i
+                    break
         self.update_slide()
 
     def toggle_auto_play(self):
@@ -1256,7 +1387,6 @@ class InteractivePresentation:
             return
         self.auto_play = False
         if self.auto_play_callback is not None:
-            # must be given the callback object returned by add_periodic_callback
             curdoc().remove_periodic_callback(self.auto_play_callback)
             self.auto_play_callback = None
         self.play_button.label = "▶ Auto Play"
@@ -1288,7 +1418,6 @@ class InteractivePresentation:
 
         self.main_content = column(self.slides[0], width=SLIDE_WIDTH)
 
-        # Root: fixed width, centered on the page with auto side margins.
         self.layout = column(
             nav_bar,
             separator,
@@ -1297,7 +1426,6 @@ class InteractivePresentation:
             styles={"margin-left": "auto", "margin-right": "auto", "max-width": "100%"},
         )
 
-        # Center every element of the layout and of every slide.
         center_everything(self.layout, is_root=True)
         for slide in self.slides:
             center_everything(slide)
