@@ -295,9 +295,6 @@ class InteractivePresentation:
         self.play_button = Button(
             label="▶ Auto Play", width=115, css_classes=["theme-btn"], align="center"
         )
-        self.stop_button = Button(
-            label="⏸ Stop", width=95, css_classes=["theme-btn"], align="center"
-        )
 
         slide_options = [
             (str(i), f"Slide {i + 1}: {self.get_slide_title(i)}")
@@ -321,8 +318,7 @@ class InteractivePresentation:
         self.prev_button.on_click(self.prev_slide)
         self.next_button.on_click(self.next_slide)
         self.home_button.on_click(self.go_home)
-        self.play_button.on_click(self.start_auto_play)
-        self.stop_button.on_click(self.stop_auto_play)
+        self.play_button.on_click(self.toggle_auto_play)
         self.slide_select.on_change("value", self.jump_to_slide)
 
     def get_slide_title(self, index):
@@ -738,6 +734,17 @@ class InteractivePresentation:
         )
         p_rating.add_tools(rating_hover)
 
+        def country_mean_range(column, wine_type, default):
+            """(low, high) of the per-country mean for the selected wine category."""
+            df_sub = self.df if wine_type == "Global" else self.df[self.df["Kind"] == wine_type]
+            means = df_sub.groupby("Country")[column].mean().dropna()
+            if means.empty:
+                return default
+            low, high = float(means.min()), float(means.max())
+            if low == high:  # a single country: avoid a zero-width color scale
+                high = low + 1e-6
+            return low, high
+
         select_wine = Select(
             title="Filter Wine Category:",
             value="Global",
@@ -751,6 +758,14 @@ class InteractivePresentation:
         def update_maps(attr, old, new):
             price_source.geojson = get_price_geojson(new)
             rating_source.geojson = get_rating_geojson(new)
+
+            # Rescale both color scales (and their color bars) to the new range
+            price_mapper.low, price_mapper.high = country_mean_range(
+                "Price", new, (price_mapper.low, price_mapper.high)
+            )
+            rating_mapper.low, rating_mapper.high = country_mean_range(
+                "Rating", new, (rating_mapper.low, rating_mapper.high)
+            )
 
             title_suffix = f"({new})" if new != "Global" else "(All Wines)"
             p_price.title.text = f"Average Wine Price by Country {title_suffix}"
@@ -1219,22 +1234,33 @@ class InteractivePresentation:
         self.current_slide = int(new)
         self.update_slide()
 
+    def toggle_auto_play(self):
+        """Single button: starts autoplay when idle, pauses it when playing."""
+        if self.auto_play:
+            self.stop_auto_play()
+        else:
+            self.start_auto_play()
+
     def start_auto_play(self):
-        if not self.auto_play:
-            self.auto_play = True
-            self.auto_play_callback = curdoc().add_periodic_callback(
-                self.auto_advance, 5000
-            )
-            self.play_button.label = "⏸ Pause"
-            self.play_button.css_classes = ["theme-btn", "theme-btn-active"]
+        if self.auto_play:
+            return
+        self.auto_play = True
+        self.auto_play_callback = curdoc().add_periodic_callback(
+            self.auto_advance, 5000
+        )
+        self.play_button.label = "⏸ Pause"
+        self.play_button.css_classes = ["theme-btn", "theme-btn-active"]
 
     def stop_auto_play(self):
-        if self.auto_play:
-            self.auto_play = False
-            if self.auto_play_callback:
-                curdoc().remove_periodic_callback(self.auto_advance)
-            self.play_button.label = "▶ Auto Play"
-            self.play_button.css_classes = ["theme-btn"]
+        if not self.auto_play:
+            return
+        self.auto_play = False
+        if self.auto_play_callback is not None:
+            # must be given the callback object returned by add_periodic_callback
+            curdoc().remove_periodic_callback(self.auto_play_callback)
+            self.auto_play_callback = None
+        self.play_button.label = "▶ Auto Play"
+        self.play_button.css_classes = ["theme-btn"]
 
     def auto_advance(self):
         self.next_slide()
@@ -1255,7 +1281,6 @@ class InteractivePresentation:
             self.next_button,
             self.slide_select,
             self.play_button,
-            self.stop_button,
             self.progress_div,
             width=SLIDE_WIDTH,
             styles={"justify-content": "center"},
