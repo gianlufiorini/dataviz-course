@@ -325,8 +325,8 @@ class InteractivePresentation:
         """Get title for each slide"""
         titles = [
             "Welcome",
-            "Price vs Rating (Cubic Gamma GLM)",
-            "Geographic Wine Analysis",
+            "Price vs Rating",
+            "Price and Rating by Provenance",
             "Data Overview",
             "Interactive Analysis",
             "Time Series Trends",
@@ -456,10 +456,11 @@ class InteractivePresentation:
             title=f"{initial_kind} Wine",
             y_axis_type="log",
             x_axis_label="Average Rating",
-            y_axis_label="Price ($)",
+            y_axis_label="Price (€)",
             tools="pan,wheel_zoom,reset,hover,save",
             align="center",
         )
+
         p.title.align = "center"
 
         p.background_fill_color = "#FFFFFF"
@@ -487,6 +488,7 @@ class InteractivePresentation:
             line_width=3,
             legend_label="Cubic Gamma GLM Fit"
         )
+        
         p.legend.location = "top_left"
         p.legend.background_fill_alpha = 0.85
 
@@ -503,7 +505,9 @@ class InteractivePresentation:
             </div>
             <div style="color: #5C4A42; text-align: center;"><b>Vintage:</b> @Vintage</div>
             <div style="margin-top: 3px; border-top: 1px dashed #E2D7C3; padding-top: 3px; text-align: center;">
-                <b style="color: #AF1B3F;">@Rating pts</b> | <b style="color: #218380;">$@Price{0.00}</b>
+                <b style="color: #AF1B3F;">@Rating pts | Number of Ratings: @NumberOfRatings </b> 
+            </div>
+                <b style="color: #218380;">€@Price{0.00}</b>
             </div>
         </div>
         """
@@ -623,7 +627,7 @@ class InteractivePresentation:
         p_price = figure(
             width=1160,
             height=500,
-            title="Average Wine Price by Country ($)",
+            title="Average Wine Price by Country (€)",
             tools="pan,wheel_zoom,reset,save",
             x_axis_location=None,
             y_axis_location=None,
@@ -653,7 +657,7 @@ class InteractivePresentation:
             color_mapper=price_mapper,
             width=14,
             location=(0, 0),
-            title="$",
+            title="€",
             title_text_font_size="10pt",
             label_standoff=4,
         )
@@ -664,9 +668,9 @@ class InteractivePresentation:
             <div style="font-family: 'Lusitana', Georgia, serif; padding: 6px 10px; font-size: 12px; background: #FFFFFF; border: 1.5px solid #AF1B3F; border-radius: 6px; box-shadow: 0 2px 6px rgba(0,0,0,0.1); text-align: center;">
                 <strong style="color: #AF1B3F; font-size: 13px; text-align: center;">📍 @name</strong><br/>
                 <div style="margin-top: 4px; line-height: 1.4; color: #5C4A42; text-align: center;">
-                    <b>Mean Price:</b> $@Price_Mean<br/>
-                    <b>Median Price:</b> $@Price_Median<br/>
-                    <b>Min:</b> $@Price_Min | <b>Max:</b> $@Price_Max<br/>
+                    <b>Mean Price:</b> €@Price_Mean<br/>
+                    <b>Median Price:</b> €@Price_Median<br/>
+                    <b>Min:</b> €@Price_Min | <b>Max:</b> €@Price_Max<br/>
                     <b>Wines Count:</b> @Count
                 </div>
             </div>
