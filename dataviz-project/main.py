@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+import ast
 import base64
 import json
 import os
@@ -6,7 +7,7 @@ from io import BytesIO
 import geopandas as gpd
 import matplotlib
 
-matplotlib.use("Agg")  # off-screen rendering (no GUI) for the tooltip scatterplots
+matplotlib.use("Agg")  # off-screen rendering for tooltip scatterplots
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -15,6 +16,8 @@ import statsmodels.api as sm
 from bokeh.plotting import figure, curdoc
 from bokeh.models import (
     RadioGroup,
+    RadioButtonGroup,
+    CheckboxButtonGroup,
     Div,
     Button,
     Slider,
@@ -35,7 +38,7 @@ from bokeh.models import (
     Title,
 )
 from bokeh.layouts import column, row
-from bokeh.palettes import Cividis256, PuOr11, RdYlBu11
+from bokeh.palettes import Cividis256, PuOr11, RdYlBu11, YlOrRd9
 from bokeh.transform import factor_cmap
 from bokeh.themes import Theme
 
@@ -81,7 +84,17 @@ def _merge_styles(model, extra):
 
 
 def center_everything(root, is_root=False):
-    """Centers every layout element horizontally, and all text inside Divs."""
+    """Centers every layout element horizontally, and all text inside Divs.
+
+    Three independent mechanisms are used, all pushing the same direction so they
+    can never fight each other:
+      * Columns get  align-items: center   (children centered horizontally)
+      * Rows get     justify-content: center (children centered horizontally)
+      * Every child gets align="center" (Bokeh's own align-self centering)
+      * Divs get text-align: center (inherited by the text inside the shadow DOM)
+    Full-width Divs get an explicit width instead of stretch_width, because a
+    stretched Div combined with align="center" shrinks to its content.
+    """
     from bokeh.models import Column, Row
 
     for model in root.references():
@@ -128,11 +141,10 @@ class InteractivePresentation:
         # Load dataset
         self.df = pd.read_csv(data_path)
         self.current_slide = 0
-        self.total_slides = 8
+        self.total_slides = 6
         self.slides = []
         self.auto_play = False
         self.auto_play_callback = None
-        self._is_updating = False
 
         self.create_slides()
         self.create_navigation()
@@ -321,16 +333,14 @@ class InteractivePresentation:
         self.slide_select.on_change("value", self.jump_to_slide)
 
     def get_slide_title(self, index):
-        """Get title for each slide"""
+        """Get title for each slide."""
         titles = [
             "Welcome",
             "Price vs Rating",
             "Price and Rating by Provenance",
-            "Data Overview",
-            "Interactive Analysis",
-            "Time Series Trends",
-            "Correlation Explorer",
-            "Conclusions",
+            "Correlation Matrix",
+            "Food Pairing Radar",
+            "Blend vs Variety Violin",
         ]
         return titles[index] if index < len(titles) else f"Slide {index + 1}"
 
@@ -349,16 +359,14 @@ class InteractivePresentation:
         """
 
     def create_slides(self):
-        """Create all presentation slides"""
+        """Create the merged presentation slides."""
         self.slides = [
-            self.create_slide_title(),
-            self.create_slide_1_price_vs_rating(),
-            self.create_slide_2_visual_vocabulary(),
-            self.create_slide_3_overview(),
-            self.create_slide_4_interactive(),
-            self.create_slide_5_timeseries(),
-            self.create_slide_6_correlation(),
-            self.create_slide_7_conclusions(),
+            self.create_slide_title(),                 # Slide 1 from first deck
+            self.create_slide_1_price_vs_rating(),     # Slide 2 from first deck
+            self.create_slide_2_visual_vocabulary(),   # Slide 3 from first deck
+            self.create_slide_3_overview(),            # Slide 4 from first deck
+            self.create_slide_4_interactive(),         # Slide 5 radar from mainTG.py
+            self.create_slide_6_correlation(),         # Slide 7 violin from mainTG.py
         ]
 
     def create_slide_title(self):
@@ -412,7 +420,7 @@ class InteractivePresentation:
             "Red": "#AF1B3F",
             "White": "#FFBC42",
             "Rose": "#C99DA3",
-            "Sparkling": "#218380"
+            "Sparkling": "#218380",
         }
 
         initial_kind = "Red"
@@ -471,7 +479,7 @@ class InteractivePresentation:
             alpha=0.7,
             size=8.5,
             line_color="#FFFFFF",
-            line_width=0.5
+            line_width=0.5,
         )
 
         fit_line = p.line(
@@ -480,7 +488,7 @@ class InteractivePresentation:
             source=fit_source,
             color="#000000",
             line_width=2.5,
-            legend_label="Robust linear fit (Huber)"
+            legend_label="Robust linear fit (Huber)",
         )
 
         x_min = df.loc[df["Price"] > 0, "Price"].min()
@@ -578,33 +586,69 @@ class InteractivePresentation:
 
         def get_price_geojson(wine_type):
             df_sub = self.df if wine_type == "Global" else self.df[self.df["Kind"] == wine_type]
-            stats = df_sub.groupby("Country")["Price"].agg(
-                Price_Mean="mean",
-                Price_Median="median",
-                Price_Min="min",
-                Price_Max="max",
-                Count="count"
-            ).round(2).reset_index()
+            stats = (
+                df_sub.groupby("Country")["Price"]
+                .agg(
+                    Price_Mean="mean",
+                    Price_Median="median",
+                    Price_Min="min",
+                    Price_Max="max",
+                    Count="count",
+                )
+                .round(2)
+                .reset_index()
+            )
 
             merged = WORLD_GEO.merge(stats, how="left", left_on="name", right_on="Country")
-            merged[["Price_Mean", "Price_Median", "Price_Min", "Price_Max", "Count"]] = \
-                merged[["Price_Mean", "Price_Median", "Price_Min", "Price_Max", "Count"]].fillna("N/A")
-            return merged[["geometry", "name", "Price_Mean", "Price_Median", "Price_Min", "Price_Max", "Count"]].to_json()
+            merged[
+                ["Price_Mean", "Price_Median", "Price_Min", "Price_Max", "Count"]
+            ] = merged[
+                ["Price_Mean", "Price_Median", "Price_Min", "Price_Max", "Count"]
+            ].fillna("N/A")
+            return merged[
+                [
+                    "geometry",
+                    "name",
+                    "Price_Mean",
+                    "Price_Median",
+                    "Price_Min",
+                    "Price_Max",
+                    "Count",
+                ]
+            ].to_json()
 
         def get_rating_geojson(wine_type):
             df_sub = self.df if wine_type == "Global" else self.df[self.df["Kind"] == wine_type]
-            stats = df_sub.groupby("Country")["Rating"].agg(
-                Rating_Mean="mean",
-                Rating_Median="median",
-                Rating_Min="min",
-                Rating_Max="max",
-                Count="count"
-            ).round(2).reset_index()
+            stats = (
+                df_sub.groupby("Country")["Rating"]
+                .agg(
+                    Rating_Mean="mean",
+                    Rating_Median="median",
+                    Rating_Min="min",
+                    Rating_Max="max",
+                    Count="count",
+                )
+                .round(2)
+                .reset_index()
+            )
 
             merged = WORLD_GEO.merge(stats, how="left", left_on="name", right_on="Country")
-            merged[["Rating_Mean", "Rating_Median", "Rating_Min", "Rating_Max", "Count"]] = \
-                merged[["Rating_Mean", "Rating_Median", "Rating_Min", "Rating_Max", "Count"]].fillna("N/A")
-            return merged[["geometry", "name", "Rating_Mean", "Rating_Median", "Rating_Min", "Rating_Max", "Count"]].to_json()
+            merged[
+                ["Rating_Mean", "Rating_Median", "Rating_Min", "Rating_Max", "Count"]
+            ] = merged[
+                ["Rating_Mean", "Rating_Median", "Rating_Min", "Rating_Max", "Count"]
+            ].fillna("N/A")
+            return merged[
+                [
+                    "geometry",
+                    "name",
+                    "Rating_Mean",
+                    "Rating_Median",
+                    "Rating_Min",
+                    "Rating_Max",
+                    "Count",
+                ]
+            ].to_json()
 
         price_source = GeoJSONDataSource(geojson=get_price_geojson("Global"))
         rating_source = GeoJSONDataSource(geojson=get_rating_geojson("Global"))
@@ -614,7 +658,7 @@ class InteractivePresentation:
             palette=Cividis256,
             low=float(p_means.min()) if not p_means.empty else 0.0,
             high=float(p_means.max()) if not p_means.empty else 100.0,
-            nan_color="#EBEBEB"
+            nan_color="#EBEBEB",
         )
 
         r_means = self.df.groupby("Country")["Rating"].mean()
@@ -625,7 +669,7 @@ class InteractivePresentation:
             palette=PuOr11,
             low=r_min,
             high=r_max,
-            nan_color="#EBEBEB"
+            nan_color="#EBEBEB",
         )
 
         p_price = figure(
@@ -647,7 +691,8 @@ class InteractivePresentation:
         p_price.grid.grid_line_color = None
 
         price_patches = p_price.patches(
-            "xs", "ys",
+            "xs",
+            "ys",
             source=price_source,
             fill_color={"field": "Price_Mean", "transform": price_mapper},
             fill_alpha=0.9,
@@ -681,7 +726,7 @@ class InteractivePresentation:
             """,
             renderers=[price_patches],
             attachment="above",
-            mode="mouse"
+            mode="mouse",
         )
         p_price.add_tools(price_hover)
 
@@ -704,7 +749,8 @@ class InteractivePresentation:
         p_rating.grid.grid_line_color = None
 
         rating_patches = p_rating.patches(
-            "xs", "ys",
+            "xs",
+            "ys",
             source=rating_source,
             fill_color={"field": "Rating_Mean", "transform": rating_mapper},
             fill_alpha=0.9,
@@ -738,7 +784,7 @@ class InteractivePresentation:
             """,
             renderers=[rating_patches],
             attachment="above",
-            mode="mouse"
+            mode="mouse",
         )
         p_rating.add_tools(rating_hover)
 
@@ -882,14 +928,14 @@ class InteractivePresentation:
             img_b64 = base64.b64encode(buf.read()).decode("utf-8")
             plt.close(fig_scatter)
 
-            plots_dict[f"{c1}_vs_{c2}"] = f"data:image/png;base64,{img_b64}"
+            plots_dict[f"{c1}vs{c2}"] = f"data:image/png;base64,{img_b64}"
 
         corr_unstacked["value_str"] = corr_unstacked["value"].map(lambda x: f"{x:.2f}")
         corr_unstacked["text_color"] = corr_unstacked["value"].map(
             lambda val: "#ffffff" if abs(val) > 0.60 else "#000000"
         )
         corr_unstacked["img_src"] = [
-            plots_dict[f"{x}_vs_{y}"]
+            plots_dict[f"{x}vs{y}"]
             for x, y in zip(corr_unstacked["feature_x"], corr_unstacked["feature_y"])
         ]
         corr_source = ColumnDataSource(corr_unstacked)
@@ -1010,99 +1056,497 @@ class InteractivePresentation:
         return self.stack([[title], [corr_plot]])
 
     def create_slide_4_interactive(self):
-        """Slide 4: Interactive Analysis with Controls"""
+        """Slide 4: Interactive radar chart of food pairings by wine type."""
         title = Div(
             text="""
-        <h2 style="text-align: center; color: #AF1B3F; font-family: 'Lusitana', serif;">🎮 Interactive Data Explorer</h2>
-        <p style="text-align: center; color: #5C4A42;">Adjust parameters to explore different data visualizations</p>
+        <h2 style="text-align: center; color: #AF1B3F; font-family: 'Lusitana', serif; margin-bottom: 5px;">
+            Wine & Food Pairing Profiles
+        </h2>
+        <p style="text-align: center; color: #5C4A42; font-family: 'Lusitana', Georgia, serif; font-size: 14px; margin-top: 0; margin-bottom: 15px;">
+            Compare all wines, the top 10% priciest wines, and the top 10% highest-rated wines. Use the buttons to switch datasets and show or hide wine types.
+        </p>
         """,
             sizing_mode="stretch_width",
             align="center",
         )
 
-        self.slide4_source = ColumnDataSource(data=dict(x=[], y=[]))
+        # Map the detailed Harmonize labels to the eight presentation groups.
+        food_groups = {
+            "Beef": "Red meat & game",
+            "Lamb": "Red meat & game",
+            "Veal": "Red meat & game",
+            "Game Meat": "Red meat & game",
+            "Poultry": "Poultry & pork",
+            "Chicken": "Poultry & pork",
+            "Pork": "Poultry & pork",
+            "Lean Fish": "Fish & seafood",
+            "Rich Fish": "Fish & seafood",
+            "Fish": "Fish & seafood",
+            "Seafood": "Fish & seafood",
+            "Shellfish": "Fish & seafood",
+            "Blue Cheese": "Cheese",
+            "Goat Cheese": "Cheese",
+            "Hard Cheese": "Cheese",
+            "Maturated Cheese": "Cheese",
+            "Mild Cheese": "Cheese",
+            "Soft Cheese": "Cheese",
+            "Cheese": "Cheese",
+            "Vegetarian": "Vegetarian",
+            "Salad": "Vegetarian",
+            "Mushrooms": "Vegetarian",
+            "Spicy Food": "Spicy & cured foods",
+            "Cured Meat": "Spicy & cured foods",
+            "Dessert": "Desserts & fruit",
+            "Sweet Dessert": "Desserts & fruit",
+            "Fruit Dessert": "Desserts & fruit",
+            "Cake": "Desserts & fruit",
+            "Fruit": "Desserts & fruit",
+            "Pasta": "Other savoury dishes",
+            "Pizza": "Other savoury dishes",
+            "Barbecue": "Other savoury dishes",
+            "Appetizer": "Other savoury dishes",
+            "Aperitif": "Other savoury dishes",
+            "Snack": "Other savoury dishes",
+            "Soufflé": "Other savoury dishes",
+            "Cream": "Other savoury dishes",
+        }
 
-        p = figure(width=780, height=450, title="Interactive Function Plotter", align="center")
-        p.title.align = "left"
-        self.slide4_line = p.line(
-            "x", "y", source=self.slide4_source, line_width=2, color="#AF1B3F"
-        )
+        categories = [
+            "Cheese",
+            "Desserts & fruit",
+            "Fish & seafood",
+            "Other savoury dishes",
+            "Poultry & pork",
+            "Red meat & game",
+            "Spicy & cured foods",
+            "Vegetarian",
+        ]
+        wine_types = ["Red", "White", "Rose", "Sparkling"]
 
-        self.func_select = Select(
-            title="Function:",
-            value="sin",
-            options=["sin", "cos", "exp", "log", "polynomial"],
-            css_classes=["theme-select"],
-            width=360,
+        radar_df = self.df.copy()
+        radar_df["Price"] = pd.to_numeric(radar_df["Price"], errors="coerce")
+        radar_df["Rating"] = pd.to_numeric(radar_df["Rating"], errors="coerce")
+
+        def parse_harmonize(value):
+            """Convert Harmonize values to Python lists robustly."""
+            if isinstance(value, list):
+                return value
+            if pd.isna(value):
+                return []
+            if isinstance(value, str):
+                value = value.strip()
+                try:
+                    parsed = ast.literal_eval(value)
+                    if isinstance(parsed, (list, tuple, set)):
+                        return list(parsed)
+                except (ValueError, SyntaxError):
+                    pass
+                return [
+                    item.strip().strip("'\"")
+                    for item in value.strip("[]").split(",")
+                    if item.strip().strip("'\"")
+                ]
+            return []
+
+        radar_df["_pairing"] = radar_df["Harmonize"].apply(parse_harmonize)
+
+        def create_foodgroup_percentages(df_input):
+            """Return % of wines in each wine type matched to each food group."""
+            if df_input.empty:
+                return pd.DataFrame(0.0, index=wine_types, columns=categories)
+
+            exploded = df_input[["Name", "Kind", "_pairing"]].explode("_pairing")
+            exploded["FoodGroup"] = exploded["_pairing"].map(food_groups)
+            exploded = exploded.dropna(subset=["FoodGroup"])
+
+            wine_food = exploded[["Name", "Kind", "FoodGroup"]].drop_duplicates()
+            counts = pd.crosstab(wine_food["Kind"], wine_food["FoodGroup"])
+            totals = df_input.groupby("Kind")["Name"].nunique()
+
+            percentages = pd.DataFrame(0.0, index=wine_types, columns=categories)
+            for kind in wine_types:
+                total = totals.get(kind, 0)
+                if total == 0:
+                    continue
+                for category in categories:
+                    count = counts.loc[kind, category] if kind in counts.index and category in counts.columns else 0
+                    percentages.loc[kind, category] = 100.0 * count / total
+
+            return percentages
+
+        # Calculate the 90th-percentile cutoff separately within each wine type.
+        # This means, for example, that Red wines are compared only with other
+        # Red wines when selecting the top 10% by price or rating.
+        price_cutoffs = radar_df.groupby("Kind")["Price"].quantile(0.90)
+        rating_cutoffs = radar_df.groupby("Kind")["Rating"].quantile(0.90)
+
+        top_10_price = radar_df[
+            radar_df["Price"] >= radar_df["Kind"].map(price_cutoffs)
+        ].copy()
+
+        top_10_rating = radar_df[
+            radar_df["Rating"] >= radar_df["Kind"].map(rating_cutoffs)
+        ].copy()
+
+        dataset_percentages = {
+            "All wines": create_foodgroup_percentages(radar_df),
+            "Top 10% priciest": create_foodgroup_percentages(top_10_price),
+            "Top 10% rated": create_foodgroup_percentages(top_10_rating),
+        }
+
+        dataset_titles = {
+            "All wines": "Food-pairing profile by wine type — all wines",
+            "Top 10% priciest": "Food-pairing profile — top 10% priciest within each wine type",
+            "Top 10% rated": "Food-pairing profile — top 10% rated within each wine type",
+        }
+
+        def cutoff_summary(cutoffs, decimals=2):
+            parts = []
+            for kind in wine_types:
+                if kind in cutoffs.index and pd.notna(cutoffs.loc[kind]):
+                    parts.append(f"{kind}: {cutoffs.loc[kind]:.{decimals}f}")
+            return " | ".join(parts)
+
+        dataset_notes = {
+            "All wines": "Showing all matched wines in the dataset.",
+            "Top 10% priciest": (
+                "Top 10% by price within each wine type. 90th-percentile cutoffs: "
+                + cutoff_summary(price_cutoffs, 2)
+            ),
+            "Top 10% rated": (
+                "Top 10% by rating within each wine type. 90th-percentile cutoffs: "
+                + cutoff_summary(rating_cutoffs, 2)
+            ),
+        }
+
+        # Radar geometry: convert polar coordinates to ordinary x/y coordinates.
+        n_categories = len(categories)
+        angles = np.linspace(np.pi / 2, np.pi / 2 - 2 * np.pi, n_categories, endpoint=False)
+        closed_angles = np.append(angles, angles[0])
+
+        # Keep the radar panel square, with enough plotting room for labels.
+        # The x/y ranges are deliberately identical so the radar grid remains
+        # circular instead of being stretched into an ellipse.
+        p = figure(
+            width=660,
+            height=660,
+            x_range=Range1d(-160, 160),
+            y_range=Range1d(-160, 160),
+            tools="reset,save",
+            toolbar_location="above",
+            match_aspect=True,
             align="center",
         )
-        self.param_slider = Slider(
-            start=0.1, end=5, value=1, step=0.1, title="Parameter", width=360, align="center"
+        p.title.text = dataset_titles["All wines"]
+        p.title.align = "center"
+        p.background_fill_color = "#FFFFFF"
+        p.border_fill_color = "#FDFCF7"
+        p.outline_line_color = None
+        p.xaxis.visible = False
+        p.yaxis.visible = False
+        p.grid.visible = False
+
+        # Concentric percentage rings (20% to 100%).
+        for radius in [20, 40, 60, 80, 100]:
+            ring_x = radius * np.cos(np.linspace(0, 2 * np.pi, 241))
+            ring_y = radius * np.sin(np.linspace(0, 2 * np.pi, 241))
+            p.line(ring_x, ring_y, line_color="#D9D3CC", line_width=1, line_alpha=0.8)
+            p.text(
+                x=[3],
+                y=[radius],
+                text=[f"{radius}%"],
+                text_font_size="9pt",
+                text_color="#7A6A61",
+                text_align="left",
+                text_baseline="middle",
+            )
+
+        # Category spokes and labels. Long labels are split across two lines
+        # and placed as separate text glyphs, so they fit comfortably around
+        # the square radar chart without being clipped.
+        label_radius = 118
+        label_lines = {
+            "Cheese": ["Cheese"],
+            "Desserts & fruit": ["Desserts", "& fruit"],
+            "Fish & seafood": ["Fish", "& seafood"],
+            "Other savoury dishes": ["Other savoury", "dishes"],
+            "Poultry & pork": ["Poultry", "& pork"],
+            "Red meat & game": ["Red meat", "& game"],
+            "Spicy & cured foods": ["Spicy & cured", "foods"],
+            "Vegetarian": ["Vegetarian"],
+        }
+
+        for angle, category in zip(angles, categories):
+            p.line(
+                [0, 100 * np.cos(angle)],
+                [0, 100 * np.sin(angle)],
+                line_color="#D9D3CC",
+                line_width=1,
+            )
+
+            x_label = label_radius * np.cos(angle)
+            y_label = label_radius * np.sin(angle)
+
+            align = "center"
+            if x_label > 20:
+                align = "left"
+            elif x_label < -20:
+                align = "right"
+
+            lines = label_lines.get(category, [category])
+            line_spacing = 7
+            start_offset = (len(lines) - 1) * line_spacing / 2
+
+            for i, label_text in enumerate(lines):
+                p.text(
+                    x=[x_label],
+                    y=[y_label + start_offset - i * line_spacing],
+                    text=[label_text],
+                    text_font_size="9pt",
+                    text_color="#211B18",
+                    text_align=align,
+                    text_baseline="middle",
+                )
+
+        wine_colors = {
+            "Red": "#AF1B3F",
+            "White": "#D4A72C",
+            "Rose": "#D77A8A",
+            "Sparkling": "#218380",
+        }
+
+        def make_radar_source(percentages, wine_kind):
+            """Return separate closed polygon and unique hover-point data."""
+            values = percentages.loc[wine_kind, categories].to_numpy(dtype=float)
+
+            # Closed coordinates are needed for the polygon and line only.
+            closed_values = np.append(values, values[0])
+            polygon_x = closed_values * np.cos(closed_angles)
+            polygon_y = closed_values * np.sin(closed_angles)
+
+            # Hover/scatter coordinates contain each food group exactly once.
+            # This avoids a duplicate tooltip at the first/last radar point.
+            point_x = values * np.cos(angles)
+            point_y = values * np.sin(angles)
+
+            polygon_data = dict(x=polygon_x, y=polygon_y)
+            point_data = dict(
+                x=point_x,
+                y=point_y,
+                value=values,
+                category=categories,
+                wine=[wine_kind] * n_categories,
+            )
+            return polygon_data, point_data
+
+        active_dataset = "All wines"
+        sources = {}
+        renderers = []
+        for wine_kind in wine_types:
+            polygon_data, point_data = make_radar_source(
+                dataset_percentages[active_dataset], wine_kind
+            )
+            polygon_source = ColumnDataSource(polygon_data)
+            point_source = ColumnDataSource(point_data)
+            sources[wine_kind] = {
+                "polygon": polygon_source,
+                "points": point_source,
+            }
+
+            patch = p.patch(
+                "x",
+                "y",
+                source=polygon_source,
+                fill_color=wine_colors[wine_kind],
+                fill_alpha=0.08,
+                line_color=None,
+            )
+            line = p.line(
+                "x",
+                "y",
+                source=polygon_source,
+                line_width=3,
+                line_color=wine_colors[wine_kind],
+            )
+            points = p.scatter(
+                "x",
+                "y",
+                source=point_source,
+                size=7,
+                fill_color=wine_colors[wine_kind],
+                line_color="#FFFFFF",
+                line_width=1,
+            )
+            renderers.append((patch, line, points))
+
+            p.add_tools(
+                HoverTool(
+                    renderers=[points],
+                    tooltips=[
+                        ("Wine", "@wine"),
+                        ("Food group", "@category"),
+                        ("Share", "@value{0.0}%"),
+                    ],
+                )
+            )
+
+        dataset_toggle = RadioButtonGroup(
+            labels=list(dataset_percentages.keys()),
+            active=0,
+            width=760,
+            css_classes=["theme-btn"],
+            align="center",
         )
-        self.points_slider = Slider(
-            start=50, end=500, value=100, step=50, title="Number of Points", width=360, align="center"
+        dataset_toggle.stylesheets = [
+            *dataset_toggle.stylesheets,
+            InlineStyleSheet(
+                css="""
+                .bk-btn-group .bk-btn {
+                    font-weight: 600;
+                    border-color: #AF1B3F;
+                    color: #AF1B3F;
+                    background-color: #FFFFFF;
+                }
+                .bk-btn-group .bk-btn.bk-active {
+                    color: #FFFFFF;
+                    background-color: #AF1B3F;
+                }
+                """
+            ),
+        ]
+
+        # The colored toggle buttons double as the legend, so a separate plot
+        # legend is deliberately omitted to keep the radar area uncluttered.
+        wine_toggle = CheckboxButtonGroup(
+            labels=wine_types,
+            active=[0, 1, 2, 3],
+            width=600,
+            css_classes=["theme-btn"],
+            align="center",
         )
-        self.noise_slider = Slider(
-            start=0, end=1, value=0, step=0.05, title="Noise Level", width=360, align="center"
-        )
 
-        def update_slide4():
-            func = self.func_select.value
-            param = self.param_slider.value
-            n_points = int(self.points_slider.value)
-            noise = self.noise_slider.value
+        # Give each toggle the same color as its radar series. Active buttons
+        # are filled; inactive buttons keep a colored outline/text so the color
+        # mapping remains clear even when a wine type is hidden.
+        wine_toggle.stylesheets = [
+            *wine_toggle.stylesheets,
+            InlineStyleSheet(
+                css="""
+                .bk-btn-group .bk-btn {
+                    font-weight: 600;
+                    border-width: 2px;
+                    transition: opacity 0.15s ease, background-color 0.15s ease;
+                }
 
-            x = np.linspace(0, 10, n_points)
-            if func == "sin":
-                y = np.sin(param * x)
-            elif func == "cos":
-                y = np.cos(param * x)
-            elif func == "exp":
-                y = np.exp(-param * x / 5)
-            elif func == "log":
-                y = np.log(param * x + 1)
-            else:
-                y = param * x**2 - 2 * x + 1
+                .bk-btn-group .bk-btn:nth-child(1) {
+                    color: #AF1B3F;
+                    border-color: #AF1B3F;
+                    background-color: #FFFFFF;
+                }
+                .bk-btn-group .bk-btn:nth-child(1).bk-active {
+                    color: #FFFFFF;
+                    background-color: #AF1B3F;
+                }
 
-            if noise > 0:
-                y += np.random.normal(0, noise, len(y))
+                .bk-btn-group .bk-btn:nth-child(2) {
+                    color: #8A6B00;
+                    border-color: #D4A72C;
+                    background-color: #FFFFFF;
+                }
+                .bk-btn-group .bk-btn:nth-child(2).bk-active {
+                    color: #211B18;
+                    background-color: #D4A72C;
+                }
 
-            self.slide4_source.data = dict(x=x, y=y)
-            p.title.text = f"{func.upper()} Function (param={param:.1f}, noise={noise:.1f})"
+                .bk-btn-group .bk-btn:nth-child(3) {
+                    color: #B14F63;
+                    border-color: #D77A8A;
+                    background-color: #FFFFFF;
+                }
+                .bk-btn-group .bk-btn:nth-child(3).bk-active {
+                    color: #FFFFFF;
+                    background-color: #D77A8A;
+                }
 
-        self.func_select.on_change("value", lambda a, o, n: update_slide4())
-        self.param_slider.on_change("value", lambda a, o, n: update_slide4())
-        self.points_slider.on_change("value", lambda a, o, n: update_slide4())
-        self.noise_slider.on_change("value", lambda a, o, n: update_slide4())
+                .bk-btn-group .bk-btn:nth-child(4) {
+                    color: #218380;
+                    border-color: #218380;
+                    background-color: #FFFFFF;
+                }
+                .bk-btn-group .bk-btn:nth-child(4).bk-active {
+                    color: #FFFFFF;
+                    background-color: #218380;
+                }
+                """
+            ),
+        ]
 
-        update_slide4()
-
-        info = Div(
-            text="""
-        <div style="background-color: #FFFFFF; border: 1px solid #E2D7C3; padding: 15px; border-radius: 8px; color: #211B18; text-align: center; margin: 0 auto;">
-            <h3 style="color: #AF1B3F; margin-top: 0; text-align: center;">🎯 Try These:</h3>
-            <ul style="font-size: 13px; margin-bottom: 0; text-align: center; list-style-position: inside; padding-left: 0;">
-                <li>Change function type</li>
-                <li>Adjust parameter to modify shape</li>
-                <li>Add noise for realistic data</li>
-            </ul>
-        </div>
+        note = Div(
+            text=f"""
+        <p style="text-align: center; color: #7A6A61; font-size: 12px; margin-top: 0;">
+            <b>{dataset_notes[active_dataset]}</b><br>
+            Scale: 0–100%. A value of 100% means that every wine in that selected sample has at least one pairing in the corresponding food group.
+        </p>
         """,
-            width=360,
-            height=150,
+            width=900,
             align="center",
         )
 
-        controls = column(
-            self.func_select,
-            self.param_slider,
-            self.points_slider,
-            self.noise_slider,
-            info,
+        def update_visibility(attr, old, new):
+            active = set(new)
+            for index, renderer_group in enumerate(renderers):
+                visible = index in active
+                for renderer in renderer_group:
+                    renderer.visible = visible
+
+        def update_dataset(attr, old, new):
+            dataset_name = dataset_toggle.labels[new]
+            percentages = dataset_percentages[dataset_name]
+            p.title.text = dataset_titles[dataset_name]
+
+            for wine_kind in wine_types:
+                polygon_data, point_data = make_radar_source(percentages, wine_kind)
+                sources[wine_kind]["polygon"].data = polygon_data
+                sources[wine_kind]["points"].data = point_data
+
+            note.text = f"""
+        <p style="text-align: center; color: #7A6A61; font-size: 12px; margin-top: 0;">
+            <b>{dataset_notes[dataset_name]}</b><br>
+            Scale: 0–100%. A value of 100% means that every wine in that selected sample has at least one pairing in the corresponding food group.
+        </p>
+        """
+
+        wine_toggle.on_change("active", update_visibility)
+        dataset_toggle.on_change("active", update_dataset)
+
+        selector_label = Div(
+            text="""
+        <p style="text-align: center; color: #5C4A42; font-size: 13px; margin: 0 0 3px 0;">
+            Select sample
+        </p>
+        """,
+            width=900,
+            align="center",
+        )
+        wine_label = Div(
+            text="""
+        <p style="text-align: center; color: #5C4A42; font-size: 13px; margin: 6px 0 3px 0;">
+            Select wine types
+        </p>
+        """,
+            width=900,
             align="center",
         )
 
-        return self.stack([[title], [p, controls]])
+        return self.stack([
+            [title],
+            [wine_label],
+            [wine_toggle],
+            [selector_label],
+            [dataset_toggle],
+            [p],
+            [note],
+        ])
 
     def create_slide_5_timeseries(self):
         """Slide 5: Time Series Analysis"""
@@ -1135,7 +1579,7 @@ class InteractivePresentation:
             title="Time Series with Moving Averages",
             align="center",
         )
-        p.title.align = "left"
+        p.title.align = "center"
 
         p.line("dates", "values", source=source, line_width=1, color="#C8C2BC", alpha=0.7, legend_label="Daily")
         p.line("dates", "ma7", source=source, line_width=2, color="#218380", legend_label="7-day MA")
@@ -1175,91 +1619,240 @@ class InteractivePresentation:
         return self.stack([[title], [p], [stats]])
 
     def create_slide_6_correlation(self):
-        """Slide 6: Correlation Matrix Explorer"""
+        """Slide 6: Blend versus single-variety violin plots."""
         title = Div(
             text="""
-        <h2 style="text-align: center; color: #AF1B3F; font-family: 'Lusitana', serif;">🔗 Correlation Analysis</h2>
-        <p style="text-align: center; color: #5C4A42;">Exploring relationships between variables</p>
+        <h2 style="text-align: center; color: #AF1B3F; font-family: 'Lusitana', serif; margin-bottom: 5px;">
+            Blend versus Single-Variety Wines
+        </h2>
+        <p style="text-align: center; color: #5C4A42; font-family: 'Lusitana', Georgia, serif; font-size: 14px; margin-top: 0; margin-bottom: 10px;">
+            Compare the distributions of ratings and prices for blended wines and single-variety wines.
+        </p>
         """,
             sizing_mode="stretch_width",
             align="center",
         )
 
-        n_vars = 8
-        n_samples = 100
-        var_names = [f"Var_{i + 1}" for i in range(n_vars)]
+        violin_df = self.df.copy()
+        violin_df["Rating"] = pd.to_numeric(violin_df["Rating"], errors="coerce")
+        violin_df["Price"] = pd.to_numeric(violin_df["Price"], errors="coerce")
 
-        data = np.random.randn(n_samples, n_vars)
-        data[:, 1] = data[:, 0] * 0.8 + np.random.randn(n_samples) * 0.2
-        data[:, 2] = data[:, 0] * -0.6 + np.random.randn(n_samples) * 0.3
-        data[:, 4] = data[:, 3] * 0.7 + np.random.randn(n_samples) * 0.3
+        # Match the notebook logic: Varietal/100% is single-variety; all other elaborate types are blends.
+        violin_df["Blend type"] = np.where(
+            violin_df["Elaborate"].eq("Varietal/100%"),
+            "Single-variety",
+            "Blend",
+        )
 
-        corr_matrix = np.corrcoef(data.T)
+        # Use log price to reduce the visual dominance of extreme high-price wines.
+        violin_df = violin_df[(violin_df["Price"] > 0) & violin_df["Rating"].notna()].copy()
+        violin_df["Log price"] = np.log(violin_df["Price"])
 
-        corr_data = []
-        for i, var1 in enumerate(var_names):
-            for j, var2 in enumerate(var_names):
-                corr_data.append((var1, var2, corr_matrix[i, j]))
+        blend_order = ["Blend", "Single-variety"]
+        blend_colors = {
+            "Single-variety": "#218380",
+            "Blend": "#AF1B3F",
+        }
 
-        source = ColumnDataSource(
-            data=dict(
-                var1=[x[0] for x in corr_data],
-                var2=[x[1] for x in corr_data],
-                corr=[x[2] for x in corr_data],
+        def smooth_density(values, x_grid):
+            """Small dependency-free KDE-like density for Bokeh violin shapes."""
+            values = pd.Series(values).dropna().to_numpy(dtype=float)
+            if len(values) < 2:
+                return np.zeros_like(x_grid)
+
+            std = np.std(values, ddof=1)
+            if std <= 0 or not np.isfinite(std):
+                std = 1e-6
+
+            # Silverman's rule of thumb, with a small floor to avoid overly narrow spikes.
+            bandwidth = max(1.06 * std * (len(values) ** (-1 / 5)), std * 0.08, 1e-6)
+            z = (x_grid[:, None] - values[None, :]) / bandwidth
+            density = np.exp(-0.5 * z ** 2).sum(axis=1) / (len(values) * bandwidth * np.sqrt(2 * np.pi))
+            return density
+
+        def make_violin_data(data, value_col, x_padding=0.05):
+            values_all = data[value_col].dropna().to_numpy(dtype=float)
+            x_min, x_max = float(values_all.min()), float(values_all.max())
+            span = x_max - x_min
+            if span == 0:
+                span = 1.0
+            x_grid = np.linspace(x_min - x_padding * span, x_max + x_padding * span, 160)
+
+            patch_sources = []
+            stat_rows = []
+            for y_pos, blend_type in enumerate(blend_order):
+                values = data.loc[data["Blend type"] == blend_type, value_col].dropna().to_numpy(dtype=float)
+                density = smooth_density(values, x_grid)
+                if density.max() > 0:
+                    width = density / density.max() * 0.34
+                else:
+                    width = np.zeros_like(density)
+
+                xs = np.concatenate([x_grid, x_grid[::-1]])
+                ys = np.concatenate([y_pos + width, (y_pos - width)[::-1]])
+
+                if len(values) > 0:
+                    q1, median, q3 = np.percentile(values, [25, 50, 75])
+                    mean = float(np.mean(values))
+                else:
+                    q1 = median = q3 = mean = np.nan
+
+                source = ColumnDataSource(
+                    data=dict(
+                        x=xs,
+                        y=ys,
+                        blend_type=[blend_type] * len(xs),
+                        n=[len(values)] * len(xs),
+                        median=[median] * len(xs),
+                        q1=[q1] * len(xs),
+                        q3=[q3] * len(xs),
+                    )
+                )
+                patch_sources.append((source, blend_type, y_pos, q1, median, q3, len(values), mean))
+                stat_rows.append((blend_type, len(values), mean, median, q1, q3))
+
+            return patch_sources, stat_rows, (x_min - x_padding * span, x_max + x_padding * span)
+
+        def create_violin_plot(value_col, title_text, x_label, width=560, height=410):
+            patch_sources, stat_rows, x_range = make_violin_data(violin_df, value_col)
+
+            p = figure(
+                width=width,
+                height=height,
+                x_range=Range1d(*x_range),
+                y_range=Range1d(-0.65, 1.65),
+                title=title_text,
+                tools="pan,wheel_zoom,reset,save",
+                toolbar_location="above",
+                align="center",
             )
+            p.title.align = "center"
+            p.background_fill_color = "#FFFFFF"
+            p.border_fill_color = "#FDFCF7"
+            p.outline_line_color = "#E2D7C3"
+            p.xaxis.axis_label = x_label
+            p.yaxis.ticker = [0, 1]
+            p.yaxis.major_label_overrides = {0: "Single-variety", 1: "Blend"}
+            p.ygrid.grid_line_color = None
+            p.xgrid.grid_line_color = "#E2D7C3"
+            p.xgrid.grid_line_alpha = 0.45
+
+            hover_renderers = []
+            for source, blend_type, y_pos, q1, median, q3, n, mean in patch_sources:
+                p.patch(
+                    "x",
+                    "y",
+                    source=source,
+                    fill_color=blend_colors[blend_type],
+                    fill_alpha=0.32,
+                    line_color=blend_colors[blend_type],
+                    line_width=2,
+                )
+
+                # Quartile line and median marker inside the violin.
+                if np.isfinite(q1) and np.isfinite(q3):
+                    p.segment(
+                        q1, y_pos, q3, y_pos,
+                        line_color="#211B18",
+                        line_width=3,
+                        line_alpha=0.65,
+                    )
+
+                # Use a dedicated one-row source for hover information.
+                # Hovering a polygon patch does not provide a stable data-row index
+                # and therefore produced Bokeh's "???" placeholders.
+                if np.isfinite(median):
+                    stat_source = ColumnDataSource(
+                        data=dict(
+                            x=[median],
+                            y=[y_pos],
+                            blend_type=[blend_type],
+                            n=[n],
+                            median=[median],
+                            q1=[q1],
+                            q3=[q3],
+                        )
+                    )
+                    median_point = p.scatter(
+                        "x",
+                        "y",
+                        source=stat_source,
+                        size=11,
+                        color="#211B18",
+                        line_color="#FFFFFF",
+                        line_width=1,
+                    )
+                    hover_renderers.append(median_point)
+
+            p.add_tools(
+                HoverTool(
+                    renderers=hover_renderers,
+                    tooltips=[
+                        ("Wine type", "@blend_type"),
+                        ("Number of wines", "@n{0,0}"),
+                        ("Median", "@median{0.00}"),
+                        ("Q1", "@q1{0.00}"),
+                        ("Q3", "@q3{0.00}"),
+                    ],
+                    attachment="above",
+                )
+            )
+            return p, stat_rows
+
+        rating_plot, rating_stats = create_violin_plot(
+            "Rating",
+            "Rating distribution",
+            "Rating",
+        )
+        price_plot, price_stats = create_violin_plot(
+            "Log price",
+            "Price distribution",
+            "Log price",
         )
 
-        p = figure(
-            x_range=var_names,
-            y_range=list(reversed(var_names)),
-            width=680,
-            height=500,
-            title="Correlation Matrix",
-            toolbar_location="above",
-            tools="hover,save",
-            align="center",
-        )
-        p.title.align = "left"
+        def stat_html(label, rows):
+            body_rows = "".join(
+                f"""
+                <tr>
+                    <td style='padding: 3px 8px; text-align: center;'>{blend_type}</td>
+                    <td style='padding: 3px 8px; text-align: center;'>{n:,}</td>
+                    <td style='padding: 3px 8px; text-align: center;'>{median:.2f}</td>
+                    <td style='padding: 3px 8px; text-align: center;'>{q1:.2f} - {q3:.2f}</td>
+                </tr>
+                """
+                for blend_type, n, mean, median, q1, q3 in rows
+            )
+            return f"""
+                <h4 style='color: #AF1B3F; margin: 2px 0 4px 0; text-align: center;'>{label}</h4>
+                <table style='width: 100%; border-collapse: collapse; font-size: 12px; color: #211B18; text-align: center;'>
+                    <tr style='border-bottom: 1px solid #E2D7C3;'>
+                        <th style='padding: 3px 8px; text-align: center;'>Type</th>
+                        <th style='padding: 3px 8px; text-align: center;'>n</th>
+                        <th style='padding: 3px 8px; text-align: center;'>Median</th>
+                        <th style='padding: 3px 8px; text-align: center;'>IQR</th>
+                    </tr>
+                    {body_rows}
+                </table>
+            """
 
-        mapper = LinearColorMapper(palette=RdYlBu11[::-1], low=-1, high=1)
-
-        p.rect(
-            "var1",
-            "var2",
-            width=1,
-            height=1,
-            source=source,
-            fill_color={"field": "corr", "transform": mapper},
-            line_color="#FFFFFF",
-        )
-
-        p.hover.tooltips = [
-            ("Variables", "@var1 - @var2"),
-            ("Correlation", "@corr{0.00}"),
-        ]
-
-        color_bar = ColorBar(
-            color_mapper=mapper,
-            width=10,
-            location=(0, 0),
-            ticker=BasicTicker(desired_num_ticks=10),
-            formatter=PrintfTickFormatter(format="%.1f"),
-        )
-        p.add_layout(color_bar, "right")
-
-        guide = Div(
-            text="""
-        <div style="background-color: #FFFFFF; border: 1px solid #E2D7C3; padding: 20px; border-radius: 8px; color: #211B18; height: 220px; text-align: center; margin: 0 auto;">
-            <h3 style="color: #AF1B3F; margin-top: 0; text-align: center;">📊 Interpretation Guide:</h3>
-            <p style="font-size: 14px; line-height: 1.5; text-align: center;">Hover over individual cells to inspect precise correlation coefficients between dataset variables.</p>
+        summary = Div(
+            text=f"""
+        <div style="background-color: #FFFFFF; border: 1px solid #E2D7C3; padding: 10px 16px; border-radius: 8px; color: #211B18; text-align: center; margin: 0 auto;">
+            <p style="font-size: 13px; margin: 0 0 8px 0; color: #5C4A42; text-align: center;">
+                Filled shapes show the distribution; the black dot marks the median and the horizontal line shows the interquartile range.
+            </p>
+            <div style="display: flex; gap: 24px; justify-content: center; align-items: flex-start;">
+                <div style="width: 48%; text-align: center;">{stat_html('Rating', rating_stats)}</div>
+                <div style="width: 48%; text-align: center;">{stat_html('Log price', price_stats)}</div>
+            </div>
         </div>
         """,
-            width=440,
-            height=260,
+            width=1120,
+            height=155,
             align="center",
         )
 
-        return self.stack([[title], [p, guide]])
+        return self.stack([[title], [rating_plot, price_plot], [summary]])
 
     def create_slide_7_conclusions(self):
         """Slide 7: Conclusions and Summary"""
@@ -1325,16 +1918,12 @@ class InteractivePresentation:
 
     def update_slide(self):
         """Update current slide display and UI elements"""
-        self._is_updating = True
-        try:
-            self.prev_button.disabled = self.current_slide == 0
-            self.next_button.disabled = self.current_slide == self.total_slides - 1
+        self.prev_button.disabled = self.current_slide == 0
+        self.next_button.disabled = self.current_slide == self.total_slides - 1
 
-            self.progress_div.text = self.get_progress_html()
-            self.slide_select.value = str(self.current_slide)
-            self.main_content.children = [self.slides[self.current_slide]]
-        finally:
-            self._is_updating = False
+        self.progress_div.text = self.get_progress_html()
+        self.slide_select.value = str(self.current_slide)
+        self.main_content.children = [self.slides[self.current_slide]]
 
     def prev_slide(self):
         if self.current_slide > 0:
@@ -1354,15 +1943,7 @@ class InteractivePresentation:
         self.update_slide()
 
     def jump_to_slide(self, attr, old, new):
-        if getattr(self, "_is_updating", False):
-            return
-        try:
-            self.current_slide = int(new)
-        except (ValueError, TypeError):
-            for i in range(self.total_slides):
-                if str(i) == str(new) or f"Slide {i + 1}" in str(new):
-                    self.current_slide = i
-                    break
+        self.current_slide = int(new)
         self.update_slide()
 
     def toggle_auto_play(self):
@@ -1387,6 +1968,7 @@ class InteractivePresentation:
             return
         self.auto_play = False
         if self.auto_play_callback is not None:
+            # must be given the callback object returned by add_periodic_callback
             curdoc().remove_periodic_callback(self.auto_play_callback)
             self.auto_play_callback = None
         self.play_button.label = "▶ Auto Play"
@@ -1418,6 +2000,7 @@ class InteractivePresentation:
 
         self.main_content = column(self.slides[0], width=SLIDE_WIDTH)
 
+        # Root: fixed width, centered on the page with auto side margins.
         self.layout = column(
             nav_bar,
             separator,
@@ -1426,6 +2009,7 @@ class InteractivePresentation:
             styles={"margin-left": "auto", "margin-right": "auto", "max-width": "100%"},
         )
 
+        # Center every element of the layout and of every slide.
         center_everything(self.layout, is_root=True)
         for slide in self.slides:
             center_everything(slide)
