@@ -1615,7 +1615,7 @@ class InteractivePresentation:
 
         # Use log price to reduce the visual dominance of extreme high-price wines.
         violin_df = violin_df[(violin_df["Price"] > 0) & violin_df["Rating"].notna()].copy()
-        violin_df["Log price"] = np.log(violin_df["Price"])
+        violin_df["Log price"] = np.log10(violin_df["Price"])
 
         blend_order = ["Blend", "Single-variety"]
         blend_colors = {
@@ -1624,7 +1624,6 @@ class InteractivePresentation:
         }
 
         def smooth_density(values, x_grid):
-            """Small dependency-free KDE-like density for Bokeh violin shapes."""
             values = pd.Series(values).dropna().to_numpy(dtype=float)
             if len(values) < 2:
                 return np.zeros_like(x_grid)
