@@ -1102,7 +1102,7 @@ class InteractivePresentation:
             Wine & Food Pairing Profiles
         </h2>
         <p style="text-align: center; color: #5C4A42; font-family: 'Lusitana', Georgia, serif; font-size: 14px; margin-top: 0; margin-bottom: 15px;">
-            For each wine type see w<b style="color: #AF1B3F;">hat percentage of wine goes with each food. By selecting the appropriate button you can restrict your attention to the top 10% wines in the category in terms of rating or in terms of price.
+            For each wine type see what percentage of wine goes with each food. By selecting the appropriate button you can restrict your attention to the top 10% wines in the category in terms of rating or in terms of price.
         </p>
         """,
             sizing_mode="stretch_width",
