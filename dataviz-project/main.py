@@ -397,14 +397,20 @@ class InteractivePresentation:
 
     def create_slide_1_price_vs_rating(self):
         """Slide 1: Scatter plot of price vs rating with a robust linear regression fit (Huber, on log price)"""
+         
         title = Div(
             text="""
-             <h2 style="text-align: center; color: #AF1B3F; font-family: 'Lusitana', serif; margin-bottom: 5px;">
+            <h2 style="text-align: center; color: #AF1B3F; font-family: 'Lusitana', serif; margin-bottom: 5px;">
                 Average Rating vs. Price
             </h2>
-            <p style="text-align: center; color: #5C4A42; font-size: 14px; margin-top: 0; margin-bottom: 15px;">
-                    Select a wine category below to inspect rating and price distribution alongside a robust linear regression fit (Huber loss, fitted on log price).
+            <p style="text-align: center; color: #5C4A42; font-size: 15px; margin-top: 0; margin-bottom: 12px;">
+                Select a wine category below to inspect rating and price distribution alongside a robust linear regression fit.
             </p>
+            
+            <!-- Fixed Model Description across all wine categories -->
+            <div style="max-width: 1150px; margin: 0 auto 10px auto; padding: 10px 16px; background: #FDFCF7; border: 1px solid #EAE5DC; border-radius: 6px; font-family: sans-serif; font-size: 14px; color: #4A3B32; line-height: 1.5; text-align: center;">
+                A robust linear fit with Huber loss was chosen to capture the main trend, reducing the impact of outliers.
+            </div>
             """,
             sizing_mode="stretch_width",
             align="center",
@@ -457,7 +463,7 @@ class InteractivePresentation:
             height=650,
             title=f"{initial_kind} Wine",
             x_axis_type="log",
-            x_axis_label="Price (€)",
+            x_axis_label="Price (€, log scale)",
             y_axis_label="Average Rating",
             tools="pan,wheel_zoom,reset,hover,save",
             align="center",
@@ -487,8 +493,7 @@ class InteractivePresentation:
             y="y_fit",
             source=fit_source,
             color="#000000",
-            line_width=2.5,
-            legend_label="Robust linear fit (Huber)",
+            line_width=2.5
         )
 
         x_min = df.loc[df["Price"] > 0, "Price"].min()
@@ -500,9 +505,6 @@ class InteractivePresentation:
         y_max = df["Rating_jittered"].max()
         y_pad = 0.05 * (y_max - y_min)
         p.y_range = Range1d(y_min - y_pad, y_max + y_pad)
-
-        p.legend.location = "top_left"
-        p.legend.background_fill_alpha = 0.85
 
         hover = p.select_one(HoverTool)
         hover.renderers = [scatter]
@@ -549,7 +551,16 @@ class InteractivePresentation:
 
         toggle.on_change("active", update_plot)
 
-        return self.stack([[title], [toggle], [p]])
+        description = Div(text = 
+            """
+             <div style="max-width: 1150px; margin: 0 auto 10px auto; padding: 10px 16px; background: #FDFCF7; border: 1px solid #EAE5DC; border-radius: 6px; font-family: sans-serif; font-size: 14px; color: #4A3B32; line-height: 1.5; text-align: center;">
+                <b style="color: #AF1B3F;"> Alt-text:</b> The figure shows a scatter plot where each point represents a wine. The x axis is the wine's price on a log scale; the y axis is the wine's rating. A toggle allows the user to select a wine type. Each scatter is accompanied by a robust linear fit highlighting the general trend. For all wine types, an increasing trend is observed, i.e. as the wine's price increases, the rating also increases.
+                However, for red wines, white wines, and rose wines, some outlying points, with a rating much lower than expected given their price.
+            </div>
+            """
+        )
+
+        return self.stack([[title], [toggle], [p], [description]])
 
     def create_slide_2_visual_vocabulary(self):
         """Slide 2: Geographic Wine Analysis (Price & Rating World Maps - Vertically Stacked)"""
