@@ -1008,7 +1008,7 @@ class InteractivePresentation:
         )
         p.add_layout(
             Title(
-                text="💡 Tip: Hover over cells to see detailed pair scatterplots.",
+                text=f"💡 Tip: Hover over cells to see detailed pair scatterplots. \n Note: Non-Vintage wines were excluded from this visualization.",
                 text_font_size="9pt",
                 text_font_style="italic",
                 text_color="#555555",
