@@ -1,8 +1,8 @@
 #!/usr/bin/env python
 import ast
 import base64
-import json
 import os
+from functools import lru_cache
 from io import BytesIO
 import geopandas as gpd
 import matplotlib
@@ -20,7 +20,6 @@ from bokeh.models import (
     CheckboxButtonGroup,
     Div,
     Button,
-    Slider,
     Select,
     ColumnDataSource,
     FixedTicker,
@@ -29,8 +28,6 @@ from bokeh.models import (
     LinearColorMapper,
     ColorBar,
     BasicTicker,
-    PrintfTickFormatter,
-    CustomJS,
     GeoJSONDataSource,
     LayoutDOM,
     Widget,
@@ -38,14 +35,12 @@ from bokeh.models import (
     Title,
 )
 from bokeh.layouts import column, row
-from bokeh.palettes import Cividis256, PuOr11, RdYlBu11, YlOrRd9
-from bokeh.transform import factor_cmap
+from bokeh.palettes import Cividis256, PuOr11
 from bokeh.themes import Theme
 
-# Fixed slide width: everything is centered inside this column instead of
-# stretching across the full browser window.
+
 SLIDE_WIDTH = 1200
-CONTENT_WIDTH = 1160  # width of full-width text blocks (titles, banners)
+CONTENT_WIDTH = 1160 
 
 # ==============================================================================
 # MAP LOADING AND PROJECTION (Native Robinson via +proj=robin)
@@ -57,17 +52,17 @@ try:
     print(f"Attempting to load map from: {WORLD_PATH}")
     _world_raw = gpd.read_file(WORLD_PATH)
     WORLD_GEO = _world_raw.to_crs("+proj=robin")
+    WORLD_GEO["geometry"] = WORLD_GEO.geometry.simplify(10000, preserve_topology=True)
     print("Map successfully loaded and projected!")
 except Exception as e:
     print(f"ERROR loading map: {e}")
     try:
         WORLD_GEO = _world_raw.to_crs("EPSG:4326")
+        WORLD_GEO["geometry"] = WORLD_GEO.geometry.simplify(0.1, preserve_topology=True)
     except Exception:
         WORLD_GEO = None
 
 
-# Injected into every widget's shadow DOM (page-level CSS cannot reach inside it)
-# so button groups, radio buttons, dropdown titles and slider titles are centered.
 WIDGET_CENTER_CSS = """/*center*/
 :host { text-align: center; }
 .bk-btn { justify-content: center; text-align: center; }
@@ -84,17 +79,6 @@ def _merge_styles(model, extra):
 
 
 def center_everything(root, is_root=False):
-    """Centers every layout element horizontally, and all text inside Divs.
-
-    Three independent mechanisms are used, all pushing the same direction so they
-    can never fight each other:
-      * Columns get  align-items: center   (children centered horizontally)
-      * Rows get     justify-content: center (children centered horizontally)
-      * Every child gets align="center" (Bokeh's own align-self centering)
-      * Divs get text-align: center (inherited by the text inside the shadow DOM)
-    Full-width Divs get an explicit width instead of stretch_width, because a
-    stretched Div combined with align="center" shrinks to its content.
-    """
     from bokeh.models import Column, Row
 
     for model in root.references():
@@ -125,11 +109,6 @@ def center_everything(root, is_root=False):
 
 
 class InteractivePresentation:
-    """
-    Main application class for the Bokeh presentation system.
-    Styled with crisp white plot containers, off-white background (#FDFCF7),
-    user-specified hex colors for wine categories, and centered text/layouts.
-    """
 
     theme_path = os.path.join(base_dir, "theme.yaml")
     curdoc().theme = Theme(filename=theme_path)
@@ -141,7 +120,7 @@ class InteractivePresentation:
         # Load dataset
         self.df = pd.read_csv(data_path)
         self.current_slide = 0
-        self.total_slides = 6
+        self.total_slides = 7
         self.slides = []
         self.auto_play = False
         self.auto_play_callback = None
@@ -341,6 +320,7 @@ class InteractivePresentation:
             "Correlation Matrix",
             "Food Pairing Radar",
             "Blend vs Variety Violin",
+            "Conclusions",
         ]
         return titles[index] if index < len(titles) else f"Slide {index + 1}"
 
@@ -361,12 +341,13 @@ class InteractivePresentation:
     def create_slides(self):
         """Create the merged presentation slides."""
         self.slides = [
-            self.create_slide_title(),                 # Slide 1 from first deck
-            self.create_slide_1_price_vs_rating(),     # Slide 2 from first deck
-            self.create_slide_2_visual_vocabulary(),   # Slide 3 from first deck
-            self.create_slide_3_overview(),            # Slide 4 from first deck
-            self.create_slide_4_interactive(),         # Slide 5 radar from mainTG.py
-            self.create_slide_6_correlation(),         # Slide 7 violin from mainTG.py
+            self.create_slide_title(),                
+            self.create_slide_1_price_vs_rating(),    
+            self.create_slide_2_map(),   
+            self.create_slide_3_correlation(),            
+            self.create_slide_4_radar(),         
+            self.create_slide_5_violin(),         
+            self.create_slide_6_conclusions(),
         ]
 
     def create_slide_title(self):
@@ -562,7 +543,7 @@ class InteractivePresentation:
 
         return self.stack([[title], [toggle], [p], [description]])
 
-    def create_slide_2_visual_vocabulary(self):
+    def create_slide_2_map(self):
         """Slide 2: Geographic Wine Analysis (Price & Rating World Maps - Vertically Stacked)"""
         title = Div(
             text="""
@@ -570,7 +551,7 @@ class InteractivePresentation:
             Geographic Wine Analysis: Price & Rating by Country
         </h2>
         <p style="text-align: center; color: #5C4A42; font-family: 'Lusitana', Georgia, serif; font-size: 14px; margin-top: 0; margin-bottom: 15px;">
-            Select a wine category below to update the maps. Hover over any country to inspect detailed price and rating statistics.
+            Select a wine category below to update the maps. Hover over any country to inspect detailed price and rating statistics. Note that the limits of the color scale change according to the selected wine type.
         </p>
         """,
             sizing_mode="stretch_width",
@@ -587,6 +568,10 @@ class InteractivePresentation:
 
         options = ["Global", "Red", "White", "Rose", "Sparkling"]
 
+        # Ocean = the plot background behind the country polygons
+        OCEAN_COLOR = "#FFFFFF"
+
+
         bounds = WORLD_GEO.total_bounds
         geo_width = bounds[2] - bounds[0]
         geo_height = bounds[3] - bounds[1]
@@ -595,6 +580,7 @@ class InteractivePresentation:
         x_bounds = (float(bounds[0]), float(bounds[2]))
         y_bounds = (float(bounds[1]), float(bounds[3]))
 
+        @lru_cache(maxsize=None)
         def get_price_geojson(wine_type):
             df_sub = self.df if wine_type == "Global" else self.df[self.df["Kind"] == wine_type]
             stats = (
@@ -628,6 +614,7 @@ class InteractivePresentation:
                 ]
             ].to_json()
 
+        @lru_cache(maxsize=None)
         def get_rating_geojson(wine_type):
             df_sub = self.df if wine_type == "Global" else self.df[self.df["Kind"] == wine_type]
             stats = (
@@ -661,7 +648,15 @@ class InteractivePresentation:
                 ]
             ].to_json()
 
+        @lru_cache(maxsize=None)
+        def get_hatch_geojson(wine_type):
+            """Geometry only, for countries with no wines in the selection."""
+            df_sub = self.df if wine_type == "Global" else self.df[self.df["Kind"] == wine_type]
+            present = df_sub["Country"].unique()
+            return WORLD_GEO.loc[~WORLD_GEO["name"].isin(present), ["geometry"]].to_json()
+
         price_source = GeoJSONDataSource(geojson=get_price_geojson("Global"))
+        hatch_source = GeoJSONDataSource(geojson=get_hatch_geojson("Global"))
         rating_source = GeoJSONDataSource(geojson=get_rating_geojson("Global"))
 
         p_means = self.df.groupby("Country")["Price"].mean()
@@ -697,7 +692,7 @@ class InteractivePresentation:
             align="center",
         )
         p_price.title.align = "left"
-        p_price.background_fill_color = "#FFFFFF"
+        p_price.background_fill_color = OCEAN_COLOR
         p_price.border_fill_color = "#FDFCF7"
         p_price.grid.grid_line_color = None
 
@@ -707,10 +702,24 @@ class InteractivePresentation:
             source=price_source,
             fill_color={"field": "Price_Mean", "transform": price_mapper},
             fill_alpha=0.9,
-            line_color="#FFFFFF",
+            line_color="#000000",
             line_width=0.6,
             nonselection_fill_alpha=0.9,
             nonselection_fill_color={"field": "Price_Mean", "transform": price_mapper},
+        )
+
+        # Texture overlay: one constant pattern (fast), shared by both maps.
+        p_price.patches(
+            "xs",
+            "ys",
+            source=hatch_source,
+            fill_alpha=0,
+            line_alpha=0,
+            hatch_pattern="/",
+            hatch_color="#B8B2A7",
+            hatch_alpha=0.6,
+            hatch_scale=7,
+            hatch_weight=0.8,
         )
 
         cb_price = ColorBar(
@@ -755,7 +764,7 @@ class InteractivePresentation:
             align="center",
         )
         p_rating.title.align = "left"
-        p_rating.background_fill_color = "#FFFFFF"
+        p_rating.background_fill_color = OCEAN_COLOR
         p_rating.border_fill_color = "#FDFCF7"
         p_rating.grid.grid_line_color = None
 
@@ -765,10 +774,24 @@ class InteractivePresentation:
             source=rating_source,
             fill_color={"field": "Rating_Mean", "transform": rating_mapper},
             fill_alpha=0.9,
-            line_color="#FFFFFF",
+            line_color="#000000",
             line_width=0.6,
             nonselection_fill_alpha=0.9,
             nonselection_fill_color={"field": "Rating_Mean", "transform": rating_mapper},
+        )
+
+        # Texture overlay: one constant pattern (fast), shared by both maps.
+        p_rating.patches(
+            "xs",
+            "ys",
+            source=hatch_source,
+            fill_alpha=0,
+            line_alpha=0,
+            hatch_pattern="/",
+            hatch_color="#B8B2A7",
+            hatch_alpha=0.6,
+            hatch_scale=7,
+            hatch_weight=0.8,
         )
 
         cb_rating = ColorBar(
@@ -822,6 +845,7 @@ class InteractivePresentation:
         def update_maps(attr, old, new):
             price_source.geojson = get_price_geojson(new)
             rating_source.geojson = get_rating_geojson(new)
+            hatch_source.geojson = get_hatch_geojson(new)
 
             price_mapper.low, price_mapper.high = country_mean_range(
                 "Price", new, (price_mapper.low, price_mapper.high)
@@ -843,7 +867,7 @@ class InteractivePresentation:
             [p_rating],
         ])
 
-    def create_correlation_matrix_plot(self):
+    def create_slide_3_correlation(self):
         """Lower-triangular correlation heatmap; hovering a cell shows scatterplot."""
         COLOR_BLUE = "#0173B2"
 
@@ -1049,24 +1073,28 @@ class InteractivePresentation:
         p.xaxis.major_label_text_font_style = "bold"
         p.yaxis.major_label_text_font_style = "bold"
 
-        return p
+        takeaway = Div(
+                text="""
+                <div style="max-width: 1150px; margin: 15px auto 0 auto; padding: 14px 20px; background: #FDFCF7; border: 1px solid #EAE5DC; border-left: 6px solid #AF1B3F; border-radius: 6px; font-family: sans-serif; font-size: 15px; color: #4A3B32; line-height: 1.6;">
+                    <div style="margin-bottom: 6px;">
+                        <b style="color: #AF1B3F; font-size: 17px;">• Log Price (vs Rating: 0.76):</b> Strongest positive relationship in the matrix; price is the primary driver and indicator of perceived quality.
+                    </div>
+                    <div style="margin-bottom: 6px;">
+                        <b style="color: #AF1B3F; font-size: 17px;">• Vintage (vs Price: -0.59 | vs Rating: -0.37):</b> Reflects the harvest season; earlier years correlate with higher price and rating due to cellaring time. Multi-vintage blends (NV) lack a numeric harvest year and were excluded to preserve temporal linear correlation.
+                    </div>
+                    <div>
+                        <b style="color: #AF1B3F; font-size: 17px;">• ABV Alcohol % (vs Price: 0.21 | vs Rating: 0.21):</b> Weak positive correlation; higher alcohol percentage slightly aligns with higher rating and price, but it is not a key value driver.
+                    </div>
+                </div>
+                """,
+                sizing_mode="stretch_width",
+                align="center",
+            )
 
-    def create_slide_3_overview(self):
-        """Slide 3: Correlation matrix of the wine characteristics"""
-        title = Div(
-            text="""
-        <h2 style="text-align: center; color: #AF1B3F; font-family: 'Lusitana', serif;">Correlation Matrix</h2>
-        <p style="text-align: center; color: #5C4A42;">Hover over a cell to see the scatterplot of that pair of variables</p>
-        """,
-            sizing_mode="stretch_width",
-            align="center",
-        )
+        return self.stack([[p], [takeaway]])
 
-        corr_plot = self.create_correlation_matrix_plot()
 
-        return self.stack([[title], [corr_plot]])
-
-    def create_slide_4_interactive(self):
+    def create_slide_4_radar(self):
         """Slide 4: Interactive radar chart of food pairings by wine type."""
         title = Div(
             text="""
@@ -1074,7 +1102,7 @@ class InteractivePresentation:
             Wine & Food Pairing Profiles
         </h2>
         <p style="text-align: center; color: #5C4A42; font-family: 'Lusitana', Georgia, serif; font-size: 14px; margin-top: 0; margin-bottom: 15px;">
-            Compare all wines, the top 10% priciest wines, and the top 10% highest-rated wines. Use the buttons to switch datasets and show or hide wine types.
+            For each wine type see w<b style="color: #AF1B3F;">hat percentage of wine goes with each food. By selecting the appropriate button you can restrict your attention to the top 10% wines in the category in terms of rating or in terms of price.
         </p>
         """,
             sizing_mode="stretch_width",
@@ -1206,9 +1234,9 @@ class InteractivePresentation:
         }
 
         dataset_titles = {
-            "All wines": "Food-pairing profile by wine type — all wines",
-            "Top 10% priciest": "Food-pairing profile — top 10% priciest within each wine type",
-            "Top 10% rated": "Food-pairing profile — top 10% rated within each wine type",
+            "All wines": "All wines",
+            "Top 10% priciest": "Top 10% priciest within each wine type",
+            "Top 10% rated": "Top 10% rated within each wine type",
         }
 
         def cutoff_summary(cutoffs, decimals=2):
@@ -1559,78 +1587,8 @@ class InteractivePresentation:
             [note],
         ])
 
-    def create_slide_5_timeseries(self):
-        """Slide 5: Time Series Analysis"""
-        title = Div(
-            text="""
-        <h2 style="text-align: center; color: #AF1B3F; font-family: 'Lusitana', serif;">📅 Time Series Analysis</h2>
-        <p style="text-align: center; color: #5C4A42;">Exploring temporal patterns and trends</p>
-        """,
-            sizing_mode="stretch_width",
-            align="center",
-        )
-
-        dates = pd.date_range("2023-01-01", periods=365, freq="D")
-        base_trend = np.linspace(100, 150, 365)
-        seasonal = 10 * np.sin(np.arange(365) * 2 * np.pi / 365)
-        noise = np.random.randn(365) * 5
-        values = base_trend + seasonal + noise
-
-        ma7 = pd.Series(values).rolling(window=7).mean()
-        ma30 = pd.Series(values).rolling(window=30).mean()
-
-        source = ColumnDataSource(
-            data=dict(dates=dates, values=values, ma7=ma7, ma30=ma30)
-        )
-
-        p = figure(
-            width=1160,
-            height=420,
-            x_axis_type="datetime",
-            title="Time Series with Moving Averages",
-            align="center",
-        )
-        p.title.align = "center"
-
-        p.line("dates", "values", source=source, line_width=1, color="#C8C2BC", alpha=0.7, legend_label="Daily")
-        p.line("dates", "ma7", source=source, line_width=2, color="#218380", legend_label="7-day MA")
-        p.line("dates", "ma30", source=source, line_width=2.5, color="#AF1B3F", legend_label="30-day MA")
-
-        p.legend.location = "top_left"
-        p.legend.click_policy = "hide"
-
-        hover = HoverTool(
-            tooltips=[
-                ("Date", "@dates{%F}"),
-                ("Value", "@values{0.00}"),
-                ("7-day MA", "@ma7{0.00}"),
-                ("30-day MA", "@ma30{0.00}"),
-            ],
-            formatters={"@dates": "datetime"},
-            point_policy='follow_mouse',
-            attachment='above'
-        )
-
-        p.add_tools(hover)
-
-        stats = Div(
-            text=f"""
-        <div style="background-color: #FFFFFF; border: 1px solid #E2D7C3; padding: 15px 20px; border-radius: 8px; color: #211B18; text-align: center; margin: 0 auto;">
-            <h3 style="color: #AF1B3F; margin-top: 0; text-align: center;">📈 Time Series Statistics:</h3>
-            <table style="width: 100%; font-size: 14px; text-align: center; margin: 0 auto;">
-                <tr><td style="text-align: center;"><b>Period:</b> {dates[0].strftime("%Y-%m-%d")} to {dates[-1].strftime("%Y-%m-%d")} &nbsp;|&nbsp; <b>Mean Value:</b> {np.mean(values):.2f}</td></tr>
-            </table>
-        </div>
-        """,
-            width=1160,
-            height=100,
-            align="center",
-        )
-
-        return self.stack([[title], [p], [stats]])
-
-    def create_slide_6_correlation(self):
-        """Slide 6: Blend versus single-variety violin plots."""
+    def create_slide_5_violin(self):
+        """Slide 5: Blend versus single-variety violin plots."""
         title = Div(
             text="""
         <h2 style="text-align: center; color: #AF1B3F; font-family: 'Lusitana', serif; margin-bottom: 5px;">
@@ -1865,67 +1823,48 @@ class InteractivePresentation:
 
         return self.stack([[title], [rating_plot, price_plot], [summary]])
 
-    def create_slide_7_conclusions(self):
-        """Slide 7: Conclusions and Summary"""
+    def create_slide_6_conclusions(self):
+        """Slide 6: Conclusions"""
+        TAKEAWAYS = [
+            """<b style="color: #AF1B3F"> Finding 1</b>: In general, higher price means higher rating, although there are some exception""",
+            """<b style="color: #AF1B3F"> Finding 2</b>: Geographic provenance impacts price more than it does rating""",
+            """<b style="color: #AF1B3F"> Finding 3</b>: Higher ABV is positively correlated to (log) price and rating. Vintage is negatively correlated to (log) price and rating""",
+            """<b style="color: #AF1B3F"> Finding 4</b>: Top priced wines tend to pair with fewer food groups. Same for rating, but to a lower extent""",
+            """<b style="color: #AF1B3F"> Finding 5</b>: Elaborate impacts price but does not impact rating"""
+        ]
+
         title = Div(
             text="""
-        <h1 style="text-align: center; color: #AF1B3F; font-family: 'Lusitana', serif;">
-            🎯 Conclusions & Key Takeaways
-        </h1>
+        <h2 style="text-align: center; color: #AF1B3F; font-family: 'Lusitana', serif; margin-bottom: 5px;">
+            Conclusions
+        </h2>
+        <p style="text-align: center; color: #5C4A42; font-family: 'Lusitana', Georgia, serif; font-size: 14px; margin-top: 0; margin-bottom: 15px;">
+            What the data tells us about price, rating and wine features
+        </p>
         """,
             sizing_mode="stretch_width",
-            height=80,
             align="center",
         )
 
-        card1 = Div(
-            text="""
-        <div style="background-color: #FFFFFF; border: 1px solid #E2D7C3; padding: 20px; border-radius: 8px; color: #211B18; height: 180px; text-align: center; margin: 0 auto;">
-            <h3 style="color: #AF1B3F; margin-top: 0; text-align: center;">✅ What We've Demonstrated</h3>
-            <ul style="font-size: 14px; line-height: 1.5; text-align: center; list-style-position: inside; padding-left: 0;">
-                <li>Interactive visualizations with real-time updates</li>
-                <li>Multiple chart types and responsive layouts</li>
-                <li>Custom theme synchronization</li>
+        bullets = "".join(
+            f"<li style='margin-bottom: 14px; padding-left: 4px;'>{item}</li>"
+            for item in TAKEAWAYS
+        )
+
+        card = Div(
+            text=f"""
+        <div style="background-color: #FFFFFF; border: 1px solid #E2D7C3; border-left: 6px solid #AF1B3F; padding: 28px 44px; border-radius: 10px; color: #211B18; font-family: 'Lusitana', Georgia, serif; box-shadow: 0 4px 15px rgba(175, 27, 63, 0.05);">
+            <ul style="font-size: 20px; line-height: 1.5; text-align: left !important; margin: 0 !important; padding-left: 24px; list-style-position: outside; list-style-type: disc;">
+                {bullets}
             </ul>
         </div>
         """,
-            width=560,
-            height=220,
+            width=1000,
+            height=60 + 62 * len(TAKEAWAYS),
             align="center",
         )
 
-        card2 = Div(
-            text="""
-        <div style="background-color: #FFFFFF; border: 1px solid #E2D7C3; padding: 20px; border-radius: 8px; color: #211B18; height: 180px; text-align: center; margin: 0 auto;">
-            <h3 style="color: #AF1B3F; margin-top: 0; text-align: center;">🚀 Bokeh Advantages</h3>
-            <ul style="font-size: 14px; line-height: 1.5; text-align: center; list-style-position: inside; padding-left: 0;">
-                <li>Python callbacks for complex logic</li>
-                <li>Real-time data streaming</li>
-                <li>Server-side computation</li>
-            </ul>
-        </div>
-        """,
-            width=560,
-            height=220,
-            align="center",
-        )
-
-        thanks = Div(
-            text="""
-        <div style="text-align: center; margin: 20px auto 0 auto; font-family: 'Lusitana', serif;">
-            <h2 style="color: #AF1B3F; text-align: center;">Thank You! 🙏</h2>
-            <p style="font-size: 16px; color: #5C4A42; text-align: center;">
-                This presentation was built entirely with Bokeh Server<br>
-                All visualizations are live and interactive
-            </p>
-        </div>
-        """,
-            sizing_mode="stretch_width",
-            height=120,
-            align="center",
-        )
-
-        return self.stack([[title], [card1, card2], [thanks]])
+        return self.stack([[title], [card]])
 
     def update_slide(self):
         """Update current slide display and UI elements"""
